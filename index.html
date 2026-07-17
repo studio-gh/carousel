@@ -65,7 +65,13 @@
   .stage-wrap{flex:1; display:flex; flex-direction:column; min-width:0;}
   .stage{
     flex:1; display:flex; align-items:center; justify-content:center; padding:30px; min-height:0;
-    overflow:auto;
+    overflow:auto; position:relative; transition: background .15s ease;
+  }
+  .stage.drag-over{ background:rgba(255,173,42,.08); }
+  .stage.drag-over::after{
+    content:"Drop image to add it to this slide"; position:absolute; inset:14px; border:2px dashed var(--accent-ui);
+    border-radius:12px; display:flex; align-items:center; justify-content:center; color:var(--accent-ui);
+    font-size:14px; font-weight:600; pointer-events:none; background:rgba(44,44,44,.55);
   }
   .section-label{
     font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
@@ -239,11 +245,21 @@
     .layout-opt, .overlay-opt{ padding:9px 6px; }
     .thumb-actions button{ width:22px; height:22px; font-size:13px; }
   }
+  .credit-bar{
+    position:fixed; right:16px; bottom:10px; z-index:60; display:flex; align-items:center; gap:10px;
+  }
   .credit{
-    position:fixed; right:16px; bottom:10px; z-index:60;
     font-family:"Inter",sans-serif; font-weight:400; font-size:12px;
     color:rgba(255,252,244,.42); pointer-events:none; user-select:none; letter-spacing:.01em;
   }
+  .coffee-btn{
+    display:inline-flex; align-items:center; gap:6px; font-family:"Inter",sans-serif; font-weight:600; font-size:12px;
+    color:#1A1A1A; background:#FFDD00; padding:7px 12px; border-radius:999px; text-decoration:none;
+    box-shadow:0 3px 10px rgba(0,0,0,.35); transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .coffee-btn:hover{ transform:translateY(-1px); box-shadow:0 5px 14px rgba(0,0,0,.45); }
+  .coffee-btn:active{ transform:scale(.96); }
+  @media (max-width: 480px){ .credit-bar{ right:10px; bottom:8px; } .credit{ display:none; } .coffee-btn{ font-size:11.5px; padding:6px 10px; } }
 </style>
 </head>
 <body>
@@ -280,7 +296,12 @@
     <div class="rail" id="rail"></div>
   </div>
 </div>
-<div class="credit">by Studio GH ⚡️</div>
+<div class="credit-bar">
+  <span class="credit">by Studio GH ⚡️</span>
+  <a class="coffee-btn" href="https://buymeacoffee.com/studiogh" target="_blank" rel="noopener noreferrer" aria-label="Support Studio GH on Buy Me a Coffee">
+    &#9749; Buy me a coffee
+  </a>
+</div>
 
 <script>
 /* ============================= DATA ============================= */
@@ -422,6 +443,18 @@ function wrapLines(ctx, text, maxWidth){
 }
 function loadImageEl(dataURL){
   return new Promise(res=>{ const img = new Image(); img.onload = ()=>res(img); img.src = dataURL; });
+}
+function applyImageFileToActiveSlide(file){
+  if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
+  const s = state.slides[state.active];
+  const reader = new FileReader();
+  reader.onload = async ev=>{
+    s.image = ev.target.result; s.imageEl = await loadImageEl(s.image);
+    s.imageScale=1; s.imageOffsetX=0.5; s.imageOffsetY=0.5;
+    renderAll();
+    showToast("Image added to slide " + (state.active+1));
+  };
+  reader.readAsDataURL(file);
 }
 function getBoxes(layout, W, H){
   switch(layout){
@@ -659,15 +692,9 @@ function renderSidebar(){
   txInput.onchange = ()=>commitThumb(state.active);
 
   document.getElementById("uploadBtn").onclick = ()=>document.getElementById("fileInput").click();
-  document.getElementById("fileInput").onchange = async e=>{
+  document.getElementById("fileInput").onchange = e=>{
     const file = e.target.files[0]; if(!file) return;
-    const reader = new FileReader();
-    reader.onload = async ev=>{
-      s.image = ev.target.result; s.imageEl = await loadImageEl(s.image);
-      s.imageScale=1; s.imageOffsetX=0.5; s.imageOffsetY=0.5;
-      renderAll();
-    };
-    reader.readAsDataURL(file);
+    applyImageFileToActiveSlide(file);
   };
   const rmBtn = document.getElementById("removeImgBtn");
   if(rmBtn) rmBtn.onclick = ()=>{ s.image=null; s.imageEl=null; renderAll(); };
@@ -1245,6 +1272,31 @@ document.getElementById("mobileMenuBtn").onclick = openSidebarMobile;
 document.getElementById("sidebarBackdrop").onclick = closeSidebarMobile;
 document.getElementById("sidebarCloseBtn").onclick = closeSidebarMobile;
 window.addEventListener("orientationchange", ()=>setTimeout(renderStage, 200));
+
+// Paste image from clipboard (Ctrl/Cmd+V) anywhere in the app -> goes to the active slide
+document.addEventListener("paste", (e)=>{
+  const items = e.clipboardData && e.clipboardData.items;
+  if(!items) return;
+  for(const item of items){
+    if(item.type && item.type.startsWith("image/")){
+      const file = item.getAsFile();
+      if(file){ e.preventDefault(); applyImageFileToActiveSlide(file); }
+      break;
+    }
+  }
+});
+
+// Drag an image file from your computer onto the canvas
+const stageEl = document.getElementById("stage");
+let dragDepth = 0;
+stageEl.addEventListener("dragover", (e)=>{ e.preventDefault(); });
+stageEl.addEventListener("dragenter", (e)=>{ e.preventDefault(); dragDepth++; stageEl.classList.add("drag-over"); });
+stageEl.addEventListener("dragleave", ()=>{ dragDepth = Math.max(0, dragDepth-1); if(dragDepth===0) stageEl.classList.remove("drag-over"); });
+stageEl.addEventListener("drop", (e)=>{
+  e.preventDefault(); dragDepth = 0; stageEl.classList.remove("drag-over");
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if(file) applyImageFileToActiveSlide(file);
+});
 
 renderAll();
 </script>
