@@ -80,7 +80,7 @@
   .section-label:first-child{margin-top:0;}
   .field{margin-bottom:12px;}
   .field label{display:block; font-size:12.5px; font-weight:600; color:var(--ink); margin-bottom:6px;}
-  select, .stepper input{
+  select, .stepper input, input[type=text]{
     width:100%; font-family:"Inter",sans-serif; font-size:13px; padding:8px 10px;
     border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink);
   }
@@ -160,6 +160,7 @@
   .slide-heading{margin:0; outline:none; white-space:pre-wrap; word-wrap:break-word; width:100%;}
   .slide-body{margin:0; outline:none; white-space:pre-wrap; word-wrap:break-word; width:100%;}
   .slide-badge{position:absolute; border-radius:999px; display:flex; align-items:center; justify-content:center; white-space:nowrap;}
+  .slide-signature{position:absolute; font-weight:600; letter-spacing:.06em; text-transform:uppercase; opacity:.75; white-space:nowrap;}
 
   .rail{
     display:flex; align-items:flex-end; gap:12px; padding:14px 20px; background:var(--panel);
@@ -370,6 +371,7 @@ function blankSlideDefaults(){
     imageScale:1, imageOffsetX:0.5, imageOffsetY:0.5,
     overlayDirection:"bottom", overlayOpacity:55,
     textOffsetX:0, textOffsetY:0,
+    signature:"",
     tscale:1
   };
 }
@@ -389,7 +391,7 @@ const state = {
   headFont: "Playfair Display", headWeight: 900, headCategory: "all",
   bodyFont: "Inter", bodyWeight: 400, bodyCategory: "all",
   accent: "#FFAD2A", badgeTextColor: "#1A1A1A", size: "M",
-  showPageNum: true, badgePos: "bottom",
+  showPageNum: true, badgePos: "bottom", signaturePos: "bottom",
   slides: defaultSlides(), active: 0,
 };
 
@@ -567,6 +569,17 @@ function renderSidebar(){
 
     <div class="section-label">This slide \u2014 content</div>
     <div class="field">
+      <label>Signature / metadata <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <input type="text" id="signatureInput" placeholder="e.g. 01 // INTRO" value="${(s.signature||"").replace(/"/g,'&quot;')}" maxlength="40">
+    </div>
+    <div class="field">
+      <label>Signature position</label>
+      <div class="segmented" id="segSignaturePos">
+        <button data-k="top" class="${state.signaturePos==="top"?"active":""}">Top</button>
+        <button data-k="bottom" class="${state.signaturePos==="bottom"?"active":""}">Bottom</button>
+      </div>
+    </div>
+    <div class="field">
       <label>Background color</label>
       <div class="colorfield"><input type="color" id="bgColor" value="${s.bgColor}"><span id="bgColorLabel">${s.bgColor}</span></div>
     </div>
@@ -684,6 +697,15 @@ function renderSidebar(){
   });
 
   const bgInput = document.getElementById("bgColor");
+  const sigInput = document.getElementById("signatureInput");
+  sigInput.oninput = e=>{ s.signature = e.target.value; renderStage(); };
+  sigInput.onchange = ()=>commitThumb(state.active);
+  document.querySelectorAll("#segSignaturePos button").forEach(b=>b.onclick=()=>{
+    state.signaturePos=b.dataset.k;
+    document.querySelectorAll("#segSignaturePos button").forEach(x=>x.classList.toggle("active", x===b));
+    renderStage(); renderRail();
+  });
+
   bgInput.oninput = e=>{ s.bgColor=e.target.value; document.getElementById("bgColorLabel").textContent=e.target.value; renderStage(); };
   bgInput.onchange = ()=>commitThumb(state.active);
 
@@ -839,6 +861,18 @@ function buildSlideDOM(s, idx, editable, W){
     badge.style.fontFamily = fp.bodyFont; badge.style.fontSize = badgePx+"px"; badge.style.fontWeight = "700";
     badge.textContent = `${idx+1}/${state.slides.length}`;
     div.appendChild(badge);
+  }
+
+  if(s.signature && s.signature.trim()!==""){
+    const sig = document.createElement("div");
+    sig.className = "slide-signature";
+    sig.style.left = (W*0.05)+"px";
+    sig.style[state.signaturePos==="top"?"top":"bottom"] = (W*0.05)+"px";
+    sig.style.color = s.textColor;
+    sig.style.fontFamily = fp.bodyFont;
+    sig.style.fontSize = (W*0.022)+"px";
+    sig.textContent = s.signature;
+    div.appendChild(sig);
   }
 
   if(editable){
@@ -1126,6 +1160,17 @@ async function renderSlideCanvas(s, idx){
     ctx.fillText(label, bx+bw/2, by+bh/2+1);
   }
 
+  if(s.signature && s.signature.trim()!==""){
+    const sigPx = W*0.022;
+    ctx.font = `600 ${sigPx}px "${fp.bodyName}"`;
+    ctx.fillStyle = s.textColor;
+    ctx.globalAlpha = 0.75;
+    ctx.textAlign = "left"; ctx.textBaseline = state.signaturePos==="top" ? "top" : "bottom";
+    const sigY = state.signaturePos==="top" ? W*0.05 : H - W*0.05;
+    ctx.fillText(s.signature.toUpperCase(), W*0.05, sigY);
+    ctx.globalAlpha = 1;
+  }
+
   return canvas;
 }
 function roundRect(ctx,x,y,w,h,r){
@@ -1241,6 +1286,12 @@ function buildSlideSVG(s, idx){
     const by = state.badgePos==="top" ? W*0.05 : H - W*0.05 - bh;
     body += `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="${(bh/2).toFixed(1)}" fill="${state.accent}"/>`;
     body += `<text x="${(bx+bw/2).toFixed(1)}" y="${(by+bh/2+badgePx*0.35).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${badgePx.toFixed(1)}" fill="${state.badgeTextColor}" text-anchor="middle">${escapeXML(label)}</text>`;
+  }
+
+  if(s.signature && s.signature.trim()!==""){
+    const sigPx = W*0.022;
+    const sigY = state.signaturePos==="top" ? W*0.05 + sigPx*0.8 : H - W*0.05;
+    body += `<text x="${(W*0.05).toFixed(1)}" y="${sigY.toFixed(1)}" font-family="${fp.bodyName}" font-weight="600" font-size="${sigPx.toFixed(1)}" fill="${s.textColor}" fill-opacity="0.75" letter-spacing="1">${escapeXML(s.signature.toUpperCase())}</text>`;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${body}</svg>`;
