@@ -179,6 +179,31 @@
     background:none; color:var(--muted); font-size:22px; cursor:pointer; display:flex; align-items:center; justify-content:center;
   }
   .add-slide-btn:hover{border-color:var(--accent-ui); color:var(--accent-ui);}
+  *:focus-visible{ outline:2px solid var(--accent-ui); outline-offset:2px; border-radius:4px; }
+  .btn, .segmented button, .layout-opt, .overlay-opt, select, input[type=color], .stepper button, .thumb-frame, .add-slide-btn, .slider-tg, .switch input + .slider-tg:before {
+    transition: transform .12s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
+  }
+  .btn:active, .stepper button:active{ transform: scale(.94); }
+  .layout-opt:active, .overlay-opt:active{ transform: scale(.96); }
+  .layout-opt:hover, .overlay-opt:hover{ border-color:var(--line-strong); }
+  .layout-opt, .overlay-opt{ cursor:pointer; }
+  .thumb-wrap .thumb-frame{ transition: transform .15s ease, border-color .15s ease; }
+  .thumb-wrap:hover .thumb-frame{ transform: translateY(-2px); }
+  .thumb-wrap.active .thumb-frame{ transform: translateY(-2px); }
+  .stage .slide{ animation: slideIn .18s ease; }
+  @keyframes slideIn{ from{ opacity:.4; transform:scale(.98); } to{ opacity:1; transform:scale(1); } }
+  .dropdown-menu{ transition: opacity .12s ease, transform .12s ease; transform-origin: top right; }
+  .toast{
+    position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(20px); z-index:500;
+    background:var(--accent-ui); color:#1A1A1A; font-weight:700; font-size:13px; padding:10px 18px;
+    border-radius:999px; box-shadow:0 8px 24px rgba(0,0,0,.4); opacity:0; pointer-events:none;
+    transition: opacity .2s ease, transform .2s ease;
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .field label .tip{
+    display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%;
+    background:rgba(255,252,244,.16); color:var(--muted); font-size:10px; font-weight:700; margin-left:5px; cursor:help;
+  }
   .btn-short{display:none;}
   .mobile-menu-btn{
     display:none; align-items:center; justify-content:center; width:34px; height:34px;
@@ -361,6 +386,16 @@ function saveBlob(blob, filename){
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  showToast("Downloaded " + filename);
+}
+let toastTimer = null;
+function showToast(msg){
+  let t = document.querySelector(".toast");
+  if(!t){ t = document.createElement("div"); t.className = "toast"; document.body.appendChild(t); }
+  t.textContent = msg;
+  requestAnimationFrame(()=>t.classList.add("show"));
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove("show"), 2400);
 }
 function toggleDropdown(id){
   document.querySelectorAll(".dropdown").forEach(d=>{ if(d.id!==id) d.classList.remove("open"); });
@@ -488,9 +523,10 @@ function renderSidebar(){
     </div>
 
     <div class="section-label">This slide \u2014 layout</div>
+    <div class="empty-hint" style="margin-top:-4px;margin-bottom:8px;">How your photo and text share the slide.</div>
     <div class="layout-grid">
       ${Object.keys(LAYOUTS).map(k=>`
-        <div class="layout-opt ${k==="full"?"full-span":""} ${s.layout===k?"active":""}" data-layout="${k}">
+        <div class="layout-opt ${k==="full"?"full-span":""} ${s.layout===k?"active":""}" data-layout="${k}" role="button" tabindex="0" aria-pressed="${s.layout===k}" aria-label="${LAYOUTS[k].label} layout">
           ${layoutIcon(k)}
           <span>${LAYOUTS[k].label}</span>
         </div>`).join("")}
@@ -525,7 +561,7 @@ function renderSidebar(){
       <label>Overlay <span style="font-weight:400;color:var(--muted)">(darken image behind text)</span></label>
       ${s.image ? (s.layout==="full" ? `
       <div class="overlay-grid" id="segOverlayDir">
-        ${Object.keys(OVERLAY_DIRS).map(k=>`<div class="overlay-opt ${s.overlayDirection===k?"active":""}" data-k="${k}">${OVERLAY_DIRS[k]}</div>`).join("")}
+        ${Object.keys(OVERLAY_DIRS).map(k=>`<div class="overlay-opt ${s.overlayDirection===k?"active":""}" data-k="${k}" role="button" tabindex="0" aria-pressed="${s.overlayDirection===k}" aria-label="Overlay: ${OVERLAY_DIRS[k]}">${OVERLAY_DIRS[k]}</div>`).join("")}
       </div>
       <div class="empty-hint">"Flat" is a solid darken. The others fade from clear to dark in that direction \u2014 use the opacity slider below to adjust strength.</div>
       <div class="field" id="overlayOpacityField" ${s.overlayDirection==="none"?"style=display:none":""}>
@@ -609,7 +645,9 @@ function renderSidebar(){
   document.querySelectorAll("#segBadge button").forEach(b=>b.onclick=()=>{ state.badgePos=b.dataset.k; renderAll(); });
 
   document.querySelectorAll(".layout-opt").forEach(opt=>{
-    opt.onclick = ()=>{ s.layout=opt.dataset.layout; renderAll(); };
+    const activate = ()=>{ s.layout=opt.dataset.layout; renderAll(); };
+    opt.onclick = activate;
+    opt.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); activate(); } };
   });
 
   const bgInput = document.getElementById("bgColor");
@@ -643,13 +681,15 @@ function renderSidebar(){
   if(resetBtn) resetBtn.onclick = ()=>{ s.imageScale=1; s.imageOffsetX=0.5; s.imageOffsetY=0.5; renderSidebar(); renderStage(); commitThumb(state.active); };
 
   document.querySelectorAll(".overlay-opt").forEach(opt=>{
-    opt.onclick = ()=>{
+    const activate = ()=>{
       s.overlayDirection = opt.dataset.k;
-      document.querySelectorAll(".overlay-opt").forEach(o=>o.classList.toggle("active", o===opt));
+      document.querySelectorAll(".overlay-opt").forEach(o=>{ o.classList.toggle("active", o===opt); o.setAttribute("aria-pressed", o===opt); });
       const opField = document.getElementById("overlayOpacityField");
       if(opField) opField.style.display = s.overlayDirection==="none" ? "none" : "";
       renderStage(); commitThumb(state.active);
     };
+    opt.onclick = activate;
+    opt.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); activate(); } };
   });
   const ovRange = document.getElementById("overlayRange");
   if(ovRange){
