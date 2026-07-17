@@ -6,7 +6,7 @@
 <title>Carousel Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Inter:wght@400;500;600;700&family=Archivo+Black&family=Work+Sans:wght@400;500;600&family=Fraunces:wght@600;700&family=Karla:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&family=Bricolage+Grotesque:wght@400;800&family=Space+Mono:wght@400;700&family=Libre+Baskerville:wght@400;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Work+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Poppins:wght@400;500;600;700;800;900&family=DM+Sans:wght@400;500;600;700;800;900&family=Manrope:wght@400;500;600;700;800&family=Archivo:wght@400;500;600;700;800;900&family=Nunito+Sans:wght@400;500;600;700;800;900&family=Playfair+Display:wght@400;500;600;700;800;900&family=Fraunces:wght@400;500;600;700;800;900&family=Libre+Baskerville:wght@400;700&family=Source+Serif+4:wght@400;500;600;700;800;900&family=Lora:wght@400;500;600;700&family=Cormorant:wght@400;500;600;700&family=Archivo+Black&family=Bebas+Neue&family=Anton&family=Bricolage+Grotesque:wght@400;500;600;700;800&family=Unbounded:wght@400;500;600;700;800;900&family=Big+Shoulders:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Caveat:wght@400;500;600;700&family=Pacifico&family=Dancing+Script:wght@400;500;600;700&family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   :root{
@@ -132,7 +132,13 @@
   .frame-image img{position:absolute; max-width:none; -webkit-user-drag:none; user-select:none;}
   .frame-image.editable img{cursor:grab; touch-action:none;}
   .frame-image.editable img.dragging{cursor:grabbing;}
-  .slide-overlay{position:absolute;}
+  .text-drag-handle{
+    position:absolute; top:-14px; left:-14px; width:28px; height:28px; border-radius:50%;
+    background:var(--accent-ui); color:#1A1A1A; display:flex; align-items:center; justify-content:center;
+    font-size:14px; cursor:grab; touch-action:none; box-shadow:0 2px 6px rgba(0,0,0,.4); z-index:5;
+  }
+  .text-drag-handle.dragging{cursor:grabbing;}
+  .slide-overlay{position:absolute; pointer-events:none;}
   .slide-overlay.dir-bottom{background:linear-gradient(to bottom, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
   .slide-overlay.dir-top{background:linear-gradient(to top, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
   .slide-overlay.dir-left{background:linear-gradient(to left, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
@@ -147,7 +153,7 @@
   .frame-text.align-center{align-items:center; text-align:center;}
   .slide-heading{margin:0; outline:none; white-space:pre-wrap; word-wrap:break-word; width:100%;}
   .slide-body{margin:0; outline:none; white-space:pre-wrap; word-wrap:break-word; width:100%;}
-  .slide-badge{position:absolute; border-radius:999px; color:#1A1A1A; display:flex; align-items:center; justify-content:center; white-space:nowrap;}
+  .slide-badge{position:absolute; border-radius:999px; display:flex; align-items:center; justify-content:center; white-space:nowrap;}
 
   .rail{
     display:flex; align-items:flex-end; gap:12px; padding:14px 20px; background:var(--panel);
@@ -253,14 +259,42 @@
 
 <script>
 /* ============================= DATA ============================= */
-const FONT_PAIRINGS = {
-  modern:  { label:"Modern Editorial", headFont:'"Playfair Display",Georgia,serif', headWeight:900, bodyFont:'"Inter",sans-serif', bodyWeight:400, headName:"Playfair Display", bodyName:"Inter" },
-  bold:    { label:"Bold Statement",   headFont:'"Archivo Black",sans-serif',        headWeight:400, bodyFont:'"Work Sans",sans-serif', bodyWeight:500, headName:"Archivo Black", bodyName:"Work Sans" },
-  soft:    { label:"Soft Serif",       headFont:'"Fraunces",serif',                  headWeight:700, bodyFont:'"Karla",sans-serif', bodyWeight:400, headName:"Fraunces", bodyName:"Karla" },
-  tech:    { label:"Tech Minimal",     headFont:'"Space Grotesk",sans-serif',        headWeight:700, bodyFont:'"Space Grotesk",sans-serif', bodyWeight:400, headName:"Space Grotesk", bodyName:"Space Grotesk" },
-  pop:     { label:"Y2K Pop",          headFont:'"Bricolage Grotesque",sans-serif',  headWeight:800, bodyFont:'"Space Mono",monospace', bodyWeight:400, headName:"Bricolage Grotesque", bodyName:"Space Mono" },
-  classic: { label:"Classic Serif",    headFont:'"Libre Baskerville",serif',         headWeight:700, bodyFont:'"Source Sans 3",sans-serif', bodyWeight:400, headName:"Libre Baskerville", bodyName:"Source Sans 3" },
-};
+const FONTS = [
+  { name:"Inter", category:"sans", weights:[400,500,600,700,800,900] },
+  { name:"Work Sans", category:"sans", weights:[400,500,600,700,800] },
+  { name:"Space Grotesk", category:"sans", weights:[400,500,600,700] },
+  { name:"Poppins", category:"sans", weights:[400,500,600,700,800,900] },
+  { name:"DM Sans", category:"sans", weights:[400,500,600,700,800,900] },
+  { name:"Manrope", category:"sans", weights:[400,500,600,700,800] },
+  { name:"Archivo", category:"sans", weights:[400,500,600,700,800,900] },
+  { name:"Nunito Sans", category:"sans", weights:[400,500,600,700,800,900] },
+  { name:"Playfair Display", category:"serif", weights:[400,500,600,700,800,900] },
+  { name:"Fraunces", category:"serif", weights:[400,500,600,700,800,900] },
+  { name:"Libre Baskerville", category:"serif", weights:[400,700] },
+  { name:"Source Serif 4", category:"serif", weights:[400,500,600,700,800,900] },
+  { name:"Lora", category:"serif", weights:[400,500,600,700] },
+  { name:"Cormorant", category:"serif", weights:[400,500,600,700] },
+  { name:"Archivo Black", category:"display", weights:[400] },
+  { name:"Bebas Neue", category:"display", weights:[400] },
+  { name:"Anton", category:"display", weights:[400] },
+  { name:"Bricolage Grotesque", category:"display", weights:[400,500,600,700,800] },
+  { name:"Unbounded", category:"display", weights:[400,500,600,700,800,900] },
+  { name:"Big Shoulders", category:"display", weights:[400,500,600,700,800,900] },
+  { name:"Space Mono", category:"mono", weights:[400,700] },
+  { name:"JetBrains Mono", category:"mono", weights:[400,500,600,700,800] },
+  { name:"IBM Plex Mono", category:"mono", weights:[400,500,600,700] },
+  { name:"Caveat", category:"handwriting", weights:[400,500,600,700] },
+  { name:"Pacifico", category:"handwriting", weights:[400] },
+  { name:"Dancing Script", category:"handwriting", weights:[400,500,600,700] },
+  { name:"Kalam", category:"handwriting", weights:[300,400,700] },
+];
+const FONT_CATEGORIES = { all:"All styles", sans:"Sans-serif", serif:"Serif", display:"Display", mono:"Monospace", handwriting:"Handwriting" };
+const FALLBACK_BY_CATEGORY = { sans:"sans-serif", serif:"serif", display:"sans-serif", mono:"monospace", handwriting:"cursive" };
+function findFont(name){ return FONTS.find(f=>f.name===name) || FONTS[0]; }
+function fontsInCategory(cat){ return cat==="all" ? FONTS : FONTS.filter(f=>f.category===cat); }
+function fontFamilyCSS(name){ const f = findFont(name); return `"${f.name}",${FALLBACK_BY_CATEGORY[f.category]||"sans-serif"}`; }
+function nearestWeight(font, weight){ return font.weights.reduce((best,w)=> Math.abs(w-weight)<Math.abs(best-weight) ? w : best, font.weights[0]); }
+
 const ASPECTS = {
   portrait: { label:"Portrait 4:5", w:1080, h:1350 },
   square:   { label:"Square 1:1",   w:1080, h:1080 },
@@ -289,6 +323,7 @@ function blankSlideDefaults(){
     image:null, imageEl:null, layout:"full",
     imageScale:1, imageOffsetX:0.5, imageOffsetY:0.5,
     overlayDirection:"bottom", overlayOpacity:55,
+    textOffsetX:0, textOffsetY:0,
     tscale:1
   };
 }
@@ -304,7 +339,10 @@ function defaultSlides(){
 }
 
 const state = {
-  aspect: "portrait", fontKey: "modern", accent: "#4B3AF0", size: "M",
+  aspect: "portrait",
+  headFont: "Playfair Display", headWeight: 900, headCategory: "all",
+  bodyFont: "Inter", bodyWeight: 400, bodyCategory: "all",
+  accent: "#FFAD2A", badgeTextColor: "#1A1A1A", size: "M",
   showPageNum: true, badgePos: "bottom",
   slides: defaultSlides(), active: 0,
 };
@@ -312,6 +350,7 @@ const state = {
 let railThumbEls = [];
 let thumbDebounceTimer = null;
 let stageRefs = {};
+let textStageRef = {};
 
 /* ============================= HELPERS ============================= */
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
@@ -393,8 +432,28 @@ function renderSidebar(){
       <select id="selAspect">${Object.entries(ASPECTS).map(([k,v])=>`<option value="${k}" ${k===state.aspect?"selected":""}>${v.label}</option>`).join("")}</select>
     </div>
     <div class="field">
-      <label>Font pairing</label>
-      <select id="selFont">${Object.entries(FONT_PAIRINGS).map(([k,v])=>`<option value="${k}" ${k===state.fontKey?"selected":""}>${v.label}</option>`).join("")}</select>
+      <label>Heading style</label>
+      <select id="selHeadCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.headCategory?"selected":""}>${v}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Heading font</label>
+      <select id="selHeadFont">${fontsInCategory(state.headCategory).map(f=>`<option value="${f.name}" ${f.name===state.headFont?"selected":""}>${f.name}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Heading weight <span class="rangeval" id="headWeightLabel">${state.headWeight}</span></label>
+      <input type="range" id="headWeightRange" min="0" max="${findFont(state.headFont).weights.length-1}" step="1" value="${findFont(state.headFont).weights.indexOf(state.headWeight)}">
+    </div>
+    <div class="field">
+      <label>Body style</label>
+      <select id="selBodyCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.bodyCategory?"selected":""}>${v}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Body font</label>
+      <select id="selBodyFont">${fontsInCategory(state.bodyCategory).map(f=>`<option value="${f.name}" ${f.name===state.bodyFont?"selected":""}>${f.name}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Body weight <span class="rangeval" id="bodyWeightLabel">${state.bodyWeight}</span></label>
+      <input type="range" id="bodyWeightRange" min="0" max="${findFont(state.bodyFont).weights.length-1}" step="1" value="${findFont(state.bodyFont).weights.indexOf(state.bodyWeight)}">
     </div>
     <div class="row2">
       <div class="field">
@@ -406,9 +465,15 @@ function renderSidebar(){
         <div class="segmented" id="segSize">${["S","M","L"].map(k=>`<button data-k="${k}" class="${state.size===k?"active":""}">${k}</button>`).join("")}</div>
       </div>
     </div>
-    <div class="field">
-      <label>Accent color <span style="font-weight:400;color:var(--muted)">(page badge)</span></label>
-      <div class="colorfield"><input type="color" id="accentColor" value="${state.accent}"><span id="accentColorLabel">${state.accent}</span></div>
+    <div class="row2">
+      <div class="field">
+        <label>Badge background</label>
+        <div class="colorfield"><input type="color" id="accentColor" value="${state.accent}"><span id="accentColorLabel">${state.accent}</span></div>
+      </div>
+      <div class="field">
+        <label>Badge text</label>
+        <div class="colorfield"><input type="color" id="badgeTextColor" value="${state.badgeTextColor}"><span id="badgeTextColorLabel">${state.badgeTextColor}</span></div>
+      </div>
     </div>
     <div class="field toggle-row">
       <label style="margin:0;">Show page numbers</label>
@@ -489,7 +554,49 @@ function renderSidebar(){
   `;
 
   document.getElementById("selAspect").onchange = e=>{ state.aspect=e.target.value; renderAll(); };
-  document.getElementById("selFont").onchange = e=>{ state.fontKey=e.target.value; renderAll(); };
+  document.getElementById("selHeadCategory").onchange = e=>{
+    state.headCategory=e.target.value;
+    const opts = fontsInCategory(state.headCategory);
+    if(!opts.find(f=>f.name===state.headFont)){ state.headFont=opts[0].name; state.headWeight=opts[0].weights[opts[0].weights.length-1]; }
+    renderAll();
+  };
+  document.getElementById("selHeadFont").onchange = e=>{
+    state.headFont=e.target.value;
+    const f=findFont(state.headFont);
+    state.headWeight=nearestWeight(f, state.headWeight);
+    renderAll();
+  };
+  const headWeightRange = document.getElementById("headWeightRange");
+  headWeightRange.oninput = e=>{
+    const f=findFont(state.headFont);
+    state.headWeight=f.weights[+e.target.value];
+    document.getElementById("headWeightLabel").textContent=state.headWeight;
+    renderStage();
+  };
+  headWeightRange.onchange = ()=>commitThumb(state.active);
+  document.getElementById("selBodyCategory").onchange = e=>{
+    state.bodyCategory=e.target.value;
+    const opts = fontsInCategory(state.bodyCategory);
+    if(!opts.find(f=>f.name===state.bodyFont)){ state.bodyFont=opts[0].name; state.bodyWeight=opts[0].weights[0]; }
+    renderAll();
+  };
+  document.getElementById("selBodyFont").onchange = e=>{
+    state.bodyFont=e.target.value;
+    const f=findFont(state.bodyFont);
+    state.bodyWeight=nearestWeight(f, state.bodyWeight);
+    renderAll();
+  };
+  const bodyWeightRange = document.getElementById("bodyWeightRange");
+  bodyWeightRange.oninput = e=>{
+    const f=findFont(state.bodyFont);
+    state.bodyWeight=f.weights[+e.target.value];
+    document.getElementById("bodyWeightLabel").textContent=state.bodyWeight;
+    renderStage();
+  };
+  bodyWeightRange.onchange = ()=>commitThumb(state.active);
+  const badgeTextInput = document.getElementById("badgeTextColor");
+  badgeTextInput.oninput = e=>{ state.badgeTextColor=e.target.value; document.getElementById("badgeTextColorLabel").textContent=e.target.value; renderStage(); };
+  badgeTextInput.onchange = ()=>renderRail();
   document.getElementById("slideDec").onclick = ()=>{ if(state.slides.length>1){ state.slides.splice(state.active,1); state.active=Math.max(0,state.active-1); renderAll(); } };
   document.getElementById("slideInc").onclick = ()=>{ if(state.slides.length<12){ const clone=cloneSlide(state.slides[state.active]); clone.heading="New headline"; clone.body="Body text goes here."; state.slides.splice(state.active+1,0,clone); state.active++; renderAll(); } };
   document.querySelectorAll("#segSize button").forEach(b=>b.onclick=()=>{ state.size=b.dataset.k; renderAll(); });
@@ -572,7 +679,10 @@ function cloneSlide(s){
 function buildSlideDOM(s, idx, editable, W){
   const asp = ASPECTS[state.aspect];
   const H = W * asp.h/asp.w;
-  const fp = FONT_PAIRINGS[state.fontKey];
+  const fp = {
+    headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
+    bodyFont: fontFamilyCSS(state.bodyFont), bodyWeight: state.bodyWeight, bodyName: state.bodyFont,
+  };
   const boxes = getBoxes(s.layout||"full", W, H);
 
   const div = document.createElement("div");
@@ -613,9 +723,19 @@ function buildSlideDOM(s, idx, editable, W){
   const ts = textSizes(W, s);
   const frameText = document.createElement("div");
   frameText.className = `frame-text pos-${s.position} align-${s.align}`;
-  frameText.style.left = (boxes.text.x+pad)+"px"; frameText.style.top = (boxes.text.y+pad)+"px";
+  const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
+  frameText.style.left = (boxes.text.x+pad+toX)+"px"; frameText.style.top = (boxes.text.y+pad+toY)+"px";
   frameText.style.width = Math.max(10,boxes.text.w-2*pad)+"px"; frameText.style.height = Math.max(10,boxes.text.h-2*pad)+"px";
   frameText.style.gap = ts.gap+"px";
+
+  if(editable){
+    const handle = document.createElement("div");
+    handle.className = "text-drag-handle";
+    handle.innerHTML = "&#10021;";
+    handle.addEventListener("pointerdown", onTextDragStart);
+    frameText.appendChild(handle);
+    textStageRef = { frameText, s, W, H };
+  }
 
   const h = document.createElement("div");
   h.className = "slide-heading"; h.style.color = s.textColor;
@@ -645,6 +765,7 @@ function buildSlideDOM(s, idx, editable, W){
     const badge = document.createElement("div");
     badge.className = "slide-badge";
     badge.style.background = state.accent;
+    badge.style.color = state.badgeTextColor;
     badge.style.right = (W*0.05)+"px";
     badge.style[state.badgePos==="top"?"top":"bottom"] = (W*0.05)+"px";
     badge.style.padding = (W*0.011)+"px "+(W*0.022)+"px";
@@ -711,6 +832,40 @@ function onImageDragEnd(){
   document.removeEventListener("pointercancel", onImageDragEnd);
   if(stageRefs.imgEl) stageRefs.imgEl.classList.remove("dragging");
   dragState = null;
+  commitThumb(state.active);
+}
+
+let textDragState = null;
+function onTextDragStart(e){
+  e.preventDefault(); e.stopPropagation();
+  const r = textStageRef;
+  textDragState = { startX:e.clientX, startY:e.clientY, baseOffX:r.s.textOffsetX||0, baseOffY:r.s.textOffsetY||0, dx:0, dy:0 };
+  e.target.classList.add("dragging");
+  try{ e.target.setPointerCapture(e.pointerId); }catch(err){}
+  document.addEventListener("pointermove", onTextDragMove);
+  document.addEventListener("pointerup", onTextDragEnd);
+  document.addEventListener("pointercancel", onTextDragEnd);
+}
+function onTextDragMove(e){
+  if(!textDragState) return;
+  e.preventDefault();
+  const dx = e.clientX - textDragState.startX, dy = e.clientY - textDragState.startY;
+  textDragState.dx = dx; textDragState.dy = dy;
+  if(textStageRef.frameText) textStageRef.frameText.style.transform = `translate(${dx}px, ${dy}px)`;
+}
+function onTextDragEnd(){
+  if(!textDragState) return;
+  document.removeEventListener("pointermove", onTextDragMove);
+  document.removeEventListener("pointerup", onTextDragEnd);
+  document.removeEventListener("pointercancel", onTextDragEnd);
+  const r = textStageRef;
+  if(r.s){
+    r.s.textOffsetX = clamp(textDragState.baseOffX + textDragState.dx, -r.W*0.45, r.W*0.45);
+    r.s.textOffsetY = clamp(textDragState.baseOffY + textDragState.dy, -r.H*0.45, r.H*0.45);
+  }
+  document.querySelectorAll(".text-drag-handle.dragging").forEach(h=>h.classList.remove("dragging"));
+  textDragState = null;
+  renderStage();
   commitThumb(state.active);
 }
 
@@ -795,7 +950,10 @@ window.addEventListener("resize", ()=>{ renderStage(); });
 
 /* ============================= EXPORT: CANVAS (PNG) ============================= */
 async function ensureFontsReady(){
-  const fp = FONT_PAIRINGS[state.fontKey];
+  const fp = {
+    headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
+    bodyFont: fontFamilyCSS(state.bodyFont), bodyWeight: state.bodyWeight, bodyName: state.bodyFont,
+  };
   try{
     await Promise.all([
       document.fonts.load(`${fp.headWeight} 80px "${fp.headName}"`),
@@ -828,7 +986,10 @@ function paintOverlayCanvas(ctx, box, dir, opacity){
 
 async function renderSlideCanvas(s, idx){
   const asp = ASPECTS[state.aspect];
-  const fp = FONT_PAIRINGS[state.fontKey];
+  const fp = {
+    headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
+    bodyFont: fontFamilyCSS(state.bodyFont), bodyWeight: state.bodyWeight, bodyName: state.bodyFont,
+  };
   const W = asp.w, H = asp.h;
   const boxes = getBoxes(s.layout||"full", W, H);
   const canvas = document.createElement("canvas");
@@ -866,7 +1027,9 @@ async function renderSlideCanvas(s, idx){
   else if(s.position==="bottom") startY = textBottom - totalH;
   else startY = textTop + ((textBottom-textTop)-totalH)/2;
 
-  const x = s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad;
+  const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
+  startY += toY;
+  const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
   ctx.textAlign = s.align==="center" ? "center" : "left";
   ctx.textBaseline = "top";
   ctx.fillStyle = s.textColor;
@@ -891,7 +1054,7 @@ async function renderSlideCanvas(s, idx){
     const by = state.badgePos==="top" ? W*0.05 : H - W*0.05 - bh;
     ctx.fillStyle = state.accent;
     roundRect(ctx, bx, by, bw, bh, bh/2); ctx.fill();
-    ctx.fillStyle = "#1A1A1A";
+    ctx.fillStyle = state.badgeTextColor;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(label, bx+bw/2, by+bh/2+1);
   }
@@ -939,7 +1102,10 @@ function overlaySVG(defs, body, box, dir, opacity, gid){
 
 function buildSlideSVG(s, idx){
   const asp = ASPECTS[state.aspect];
-  const fp = FONT_PAIRINGS[state.fontKey];
+  const fp = {
+    headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
+    bodyFont: fontFamilyCSS(state.bodyFont), bodyWeight: state.bodyWeight, bodyName: state.bodyFont,
+  };
   const W = asp.w, H = asp.h;
   const boxes = getBoxes(s.layout||"full", W, H);
   let defs = "", body = "";
@@ -981,7 +1147,9 @@ function buildSlideSVG(s, idx){
   else if(s.position==="bottom") startY = textBottom - totalH;
   else startY = textTop + ((textBottom-textTop)-totalH)/2;
 
-  const x = s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad;
+  const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
+  startY += toY;
+  const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
   const anchor = s.align==="center" ? "middle" : "start";
 
   body += `<text x="${x}" y="${startY + ts.headPx*0.86}" font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
@@ -1005,7 +1173,7 @@ function buildSlideSVG(s, idx){
     const bx = W - W*0.05 - bw;
     const by = state.badgePos==="top" ? W*0.05 : H - W*0.05 - bh;
     body += `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="${(bh/2).toFixed(1)}" fill="${state.accent}"/>`;
-    body += `<text x="${(bx+bw/2).toFixed(1)}" y="${(by+bh/2+badgePx*0.35).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${badgePx.toFixed(1)}" fill="#1A1A1A" text-anchor="middle">${escapeXML(label)}</text>`;
+    body += `<text x="${(bx+bw/2).toFixed(1)}" y="${(by+bh/2+badgePx*0.35).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${badgePx.toFixed(1)}" fill="${state.badgeTextColor}" text-anchor="middle">${escapeXML(label)}</text>`;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${body}</svg>`;
