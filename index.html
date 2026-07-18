@@ -151,7 +151,8 @@
   .slide-overlay.dir-right{background:linear-gradient(to right, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
   .slide-overlay.dir-radial{background:radial-gradient(circle, rgba(0,0,0,0) 35%, rgba(0,0,0,var(--ov)) 100%);}
   .slide-overlay.dir-flat{background:rgba(0,0,0,var(--ov));}
-  .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible;}
+  .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible; pointer-events:none;}
+  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle{ pointer-events:auto; }
   .frame-text.pos-top{justify-content:flex-start;}
   .frame-text.pos-center{justify-content:center;}
   .frame-text.pos-bottom{justify-content:flex-end;}
@@ -245,10 +246,13 @@
     .segmented button{ padding:10px 4px; }
     .layout-opt, .overlay-opt{ padding:9px 6px; }
     .thumb-actions button{ width:22px; height:22px; font-size:13px; }
-    .credit-bar{ bottom:auto; top:56px; right:8px; }
-    .credit{ display:none; }
-    .coffee-btn{ font-size:11px; padding:6px 9px; box-shadow:0 2px 8px rgba(0,0,0,.4); }
+    .credit-bar{ display:none; }
+    .mobile-credit-bar{
+      display:flex; align-items:center; justify-content:center; padding:8px 12px;
+      background:var(--panel); border-bottom:1px solid var(--line);
+    }
   }
+  .mobile-credit-bar{ display:none; }
   .credit-bar{
     position:fixed; right:16px; bottom:10px; z-index:60; display:flex; align-items:center; gap:10px;
   }
@@ -290,6 +294,11 @@
   </div>
 </div>
 
+<div class="mobile-credit-bar">
+  <a class="coffee-btn" href="https://buymeacoffee.com/studiogh" target="_blank" rel="noopener noreferrer" aria-label="Support Studio GH on Buy Me a Coffee">
+    &#9749; Buy me a coffee
+  </a>
+</div>
 <div class="workspace">
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
   <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close editing panel">&#10005;</button>
