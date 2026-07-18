@@ -59,9 +59,22 @@
 
   .workspace{flex:1; display:flex; min-height:0;}
   .sidebar{
-    width:288px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--line);
+    width:304px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--line);
     overflow-y:auto; padding:18px 16px 40px;
   }
+  .section-group{ border-bottom:1px solid var(--line); margin-bottom:4px; }
+  .section-group:last-child{ border-bottom:none; }
+  .section-toggle{
+    width:100%; display:flex; align-items:center; justify-content:space-between;
+    background:none; border:none; padding:11px 2px; cursor:pointer;
+    font-family:"Inter",sans-serif; font-size:12.5px; font-weight:700; color:var(--ink);
+    letter-spacing:.01em; text-align:left;
+  }
+  .section-toggle .chev{ font-size:10px; color:var(--muted); transition:transform .15s ease; flex-shrink:0; }
+  .section-toggle[aria-expanded="true"] .chev{ transform:rotate(180deg); }
+  .section-toggle:hover .chev{ color:var(--accent-ui); }
+  .section-body{ padding-bottom:14px; }
+  .section-body.nested{ border-top:1px dashed var(--line); margin-top:10px; padding-top:12px; }
   .stage-wrap{flex:1; display:flex; flex-direction:column; min-width:0;}
   .stage{
     flex:1; display:flex; align-items:center; justify-content:center; padding:30px; min-height:0;
@@ -246,26 +259,21 @@
     .segmented button{ padding:10px 4px; }
     .layout-opt, .overlay-opt{ padding:9px 6px; }
     .thumb-actions button{ width:22px; height:22px; font-size:13px; }
-    .credit-bar{ display:none; }
-    .mobile-credit-bar{
-      display:flex; align-items:center; justify-content:center; padding:8px 12px;
-      background:var(--panel); border-bottom:1px solid var(--line);
-    }
   }
-  .mobile-credit-bar{ display:none; }
-  .credit-bar{
-    position:fixed; right:16px; bottom:10px; z-index:60; display:flex; align-items:center; gap:10px;
+  .credit-strip{
+    flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:10px;
+    padding:6px 12px; background:var(--panel); border-top:1px solid var(--line);
   }
   .credit{
-    font-family:"Inter",sans-serif; font-weight:400; font-size:12px;
+    font-family:"Inter",sans-serif; font-weight:400; font-size:11.5px;
     color:rgba(255,252,244,.42); pointer-events:none; user-select:none; letter-spacing:.01em;
   }
   .coffee-btn{
     display:inline-flex; align-items:center; gap:6px; font-family:"Inter",sans-serif; font-weight:600; font-size:12px;
-    color:#1A1A1A; background:#FFDD00; padding:7px 12px; border-radius:999px; text-decoration:none;
-    box-shadow:0 3px 10px rgba(0,0,0,.35); transition: transform .12s ease, box-shadow .12s ease;
+    color:#1A1A1A; background:#FFDD00; padding:6px 12px; border-radius:999px; text-decoration:none;
+    box-shadow:0 2px 6px rgba(0,0,0,.3); transition: transform .12s ease, box-shadow .12s ease;
   }
-  .coffee-btn:hover{ transform:translateY(-1px); box-shadow:0 5px 14px rgba(0,0,0,.45); }
+  .coffee-btn:hover{ transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.4); }
   .coffee-btn:active{ transform:scale(.96); }
 </style>
 </head>
@@ -294,25 +302,20 @@
   </div>
 </div>
 
-<div class="mobile-credit-bar">
-  <a class="coffee-btn" href="https://buymeacoffee.com/studiogh" target="_blank" rel="noopener noreferrer" aria-label="Support Studio GH on Buy Me a Coffee">
-    &#9749; Buy me a coffee
-  </a>
-</div>
 <div class="workspace">
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
   <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close editing panel">&#10005;</button>
   <div class="sidebar" id="sidebar"></div>
   <div class="stage-wrap">
     <div class="stage" id="stage"></div>
+    <div class="credit-strip">
+      <span class="credit">by Studio GH ⚡️</span>
+      <a class="coffee-btn" href="https://buymeacoffee.com/studiogh" target="_blank" rel="noopener noreferrer" aria-label="Support Studio GH on Buy Me a Coffee">
+        &#9749; Buy me a coffee
+      </a>
+    </div>
     <div class="rail" id="rail"></div>
   </div>
-</div>
-<div class="credit-bar">
-  <span class="credit">by Studio GH ⚡️</span>
-  <a class="coffee-btn" href="https://buymeacoffee.com/studiogh" target="_blank" rel="noopener noreferrer" aria-label="Support Studio GH on Buy Me a Coffee">
-    &#9749; Buy me a coffee
-  </a>
 </div>
 
 <script>
@@ -376,6 +379,10 @@ const OVERLAY_DIRS = {
   flat:   "Flat",
 };
 
+const BLEND_MODES = {
+  normal:"Normal", multiply:"Multiply", screen:"Screen", overlay:"Overlay",
+  "soft-light":"Soft light", "hard-light":"Hard light", difference:"Difference", luminosity:"Luminosity",
+};
 function blankSlideDefaults(){
   return {
     image:null, imageEl:null, layout:"full",
@@ -383,7 +390,12 @@ function blankSlideDefaults(){
     overlayDirection:"bottom", overlayOpacity:55,
     textOffsetX:0, textOffsetY:0,
     signature:"", signatureColor:null,
-    tscale:1
+    tscale:1,
+    // Layer 2: an optional second image (texture, grain, double exposure) above the base photo
+    layer2Image:null, layer2ImageEl:null,
+    layer2Scale:1, layer2OffsetX:0.5, layer2OffsetY:0.5,
+    layer2Opacity:60, layer2Blend:"normal",
+    dragLayer:"layer1",
   };
 }
 function defaultSlides(){
@@ -408,7 +420,7 @@ const state = {
 
 let railThumbEls = [];
 let thumbDebounceTimer = null;
-let stageRefs = {};
+let layerLiveRefs = {}; // { layer1:{imgEl,r}, layer2:{imgEl,r} } - refreshed each renderStage()
 let textStageRef = {};
 
 /* ============================= HELPERS ============================= */
@@ -469,6 +481,20 @@ function applyImageFileToActiveSlide(file){
   };
   reader.readAsDataURL(file);
 }
+function applyLayer2FileToActiveSlide(file){
+  if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
+  const s = state.slides[state.active];
+  if(!s.image){ showToast("Add a base photo first"); return; }
+  const reader = new FileReader();
+  reader.onload = async ev=>{
+    s.layer2Image = ev.target.result; s.layer2ImageEl = await loadImageEl(s.layer2Image);
+    s.layer2Scale=1; s.layer2OffsetX=0.5; s.layer2OffsetY=0.5;
+    s.dragLayer = "layer2";
+    renderAll();
+    showToast("Layer 2 added to slide " + (state.active+1));
+  };
+  reader.readAsDataURL(file);
+}
 function getBoxes(layout, W, H){
   switch(layout){
     case "left":   return { image:{x:0,y:0,w:W/2,h:H}, text:{x:W/2,y:0,w:W/2,h:H} };
@@ -503,15 +529,54 @@ function layoutIcon(kind){
   if(kind==="bottom") return box(`<rect y="30" width="100" height="30" fill="${IMG}"/><rect x="8" y="12" width="50" height="6" fill="${LINE}"/>`);
 }
 
+// Which collapsible sections start open. Persists for the session (not per-slide).
+const sidebarOpenState = {
+  deck:true, typography:false, badge:false,
+  layout:true, content:true, image:true, layer2:false, overlay:false, textpos:false, signature:false, colors:false,
+};
+function sec(id, title, innerHtml){
+  const open = !!sidebarOpenState[id];
+  return `<div class="section-group">
+    <button type="button" class="section-toggle" data-sec="${id}" aria-expanded="${open}">
+      <span>${title}</span><span class="chev">\u25BE</span>
+    </button>
+    <div class="section-body" id="secbody-${id}" style="${open?"":"display:none;"}">${innerHtml}</div>
+  </div>`;
+}
+function wireSectionToggles(){
+  document.querySelectorAll(".section-toggle").forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.dataset.sec;
+      sidebarOpenState[id] = !sidebarOpenState[id];
+      const body = document.getElementById("secbody-"+id);
+      if(body) body.style.display = sidebarOpenState[id] ? "" : "none";
+      btn.setAttribute("aria-expanded", sidebarOpenState[id]);
+    };
+  });
+}
+
 function renderSidebar(){
   const s = state.slides[state.active];
   const el = document.getElementById("sidebar");
   el.innerHTML = `
     <div class="section-label">Deck settings</div>
+    ${sec("deck", "Canvas & text size", `
     <div class="field">
       <label>Aspect ratio</label>
       <select id="selAspect">${Object.entries(ASPECTS).map(([k,v])=>`<option value="${k}" ${k===state.aspect?"selected":""}>${v.label}</option>`).join("")}</select>
     </div>
+    <div class="row2">
+      <div class="field">
+        <label>Slides</label>
+        <div class="stepper"><button id="slideDec">\u2212</button><span>${state.slides.length}</span><button id="slideInc">+</button></div>
+      </div>
+      <div class="field">
+        <label>Text size</label>
+        <div class="segmented" id="segSize">${["S","M","L"].map(k=>`<button data-k="${k}" class="${state.size===k?"active":""}">${k}</button>`).join("")}</div>
+      </div>
+    </div>
+    `)}
+    ${sec("typography", "Typography", `
     <div class="field">
       <label>Heading style</label>
       <select id="selHeadCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.headCategory?"selected":""}>${v}</option>`).join("")}</select>
@@ -536,15 +601,11 @@ function renderSidebar(){
       <label>Body weight <span class="rangeval" id="bodyWeightLabel">${state.bodyWeight}</span></label>
       <input type="range" id="bodyWeightRange" min="0" max="${findFont(state.bodyFont).weights.length-1}" step="1" value="${findFont(state.bodyFont).weights.indexOf(state.bodyWeight)}">
     </div>
-    <div class="row2">
-      <div class="field">
-        <label>Slides</label>
-        <div class="stepper"><button id="slideDec">\u2212</button><span>${state.slides.length}</span><button id="slideInc">+</button></div>
-      </div>
-      <div class="field">
-        <label>Text size</label>
-        <div class="segmented" id="segSize">${["S","M","L"].map(k=>`<button data-k="${k}" class="${state.size===k?"active":""}">${k}</button>`).join("")}</div>
-      </div>
+    `)}
+    ${sec("badge", "Page numbers & badge", `
+    <div class="field toggle-row">
+      <label style="margin:0;">Show page numbers</label>
+      <label class="switch"><input type="checkbox" id="togglePageNum" ${state.showPageNum?"checked":""}><span class="slider-tg"></span></label>
     </div>
     <div class="row2">
       <div class="field">
@@ -556,10 +617,6 @@ function renderSidebar(){
         <div class="colorfield"><input type="color" id="badgeTextColor" value="${state.badgeTextColor}"><span id="badgeTextColorLabel">${state.badgeTextColor}</span></div>
       </div>
     </div>
-    <div class="field toggle-row">
-      <label style="margin:0;">Show page numbers</label>
-      <label class="switch"><input type="checkbox" id="togglePageNum" ${state.showPageNum?"checked":""}><span class="slider-tg"></span></label>
-    </div>
     <div class="field" id="badgePosField" ${state.showPageNum?"":"style=display:none"}>
       <label>Badge position</label>
       <div class="segmented" id="segBadge">
@@ -567,9 +624,11 @@ function renderSidebar(){
         <button data-k="bottom" class="${state.badgePos==="bottom"?"active":""}">Bottom</button>
       </div>
     </div>
+    `)}
 
-    <div class="section-label">This slide \u2014 layout</div>
-    <div class="empty-hint" style="margin-top:-4px;margin-bottom:8px;">How your photo and text share the slide.</div>
+    <div class="section-label">This slide</div>
+    ${sec("layout", "Layout", `
+    <div class="empty-hint" style="margin-top:-2px;margin-bottom:8px;">How your photo and text share the slide.</div>
     <div class="layout-grid">
       ${Object.keys(LAYOUTS).map(k=>`
         <div class="layout-opt ${k==="full"?"full-span":""} ${s.layout===k?"active":""}" data-layout="${k}" role="button" tabindex="0" aria-pressed="${s.layout===k}" aria-label="${LAYOUTS[k].label} layout">
@@ -577,8 +636,8 @@ function renderSidebar(){
           <span>${LAYOUTS[k].label}</span>
         </div>`).join("")}
     </div>
-
-    <div class="section-label">This slide \u2014 content</div>
+    `)}
+    ${sec("content", "Text content", `
     <div class="field">
       <label>Headline</label>
       <textarea id="headingInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.heading||"")}</textarea>
@@ -587,32 +646,11 @@ function renderSidebar(){
       <label>Body text</label>
       <textarea id="bodyInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.body||"")}</textarea>
     </div>
-    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide.</div>
+    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too.</div>
+    `)}
+    ${sec("image", "Image", `
     <div class="field">
-      <label>Signature / metadata <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-      <input type="text" id="signatureInput" placeholder="e.g. 01 // INTRO" value="${(s.signature||"").replace(/"/g,'&quot;')}" maxlength="40">
-    </div>
-    <div class="field">
-      <label>Signature color</label>
-      <div class="colorfield"><input type="color" id="signatureColor" value="${s.signatureColor||s.textColor}"><span id="signatureColorLabel">${s.signatureColor||s.textColor}</span></div>
-    </div>
-    <div class="field">
-      <label>Signature position</label>
-      <div class="segmented" id="segSignaturePos">
-        <button data-k="top" class="${state.signaturePos==="top"?"active":""}">Top</button>
-        <button data-k="bottom" class="${state.signaturePos==="bottom"?"active":""}">Bottom</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>Background color</label>
-      <div class="colorfield"><input type="color" id="bgColor" value="${s.bgColor}"><span id="bgColorLabel">${s.bgColor}</span></div>
-    </div>
-    <div class="field">
-      <label>Text color</label>
-      <div class="colorfield"><input type="color" id="textColor" value="${s.textColor}"><span id="textColorLabel">${s.textColor}</span></div>
-    </div>
-    <div class="field">
-      <label>Image</label>
+      <label>Photo (layer 1)</label>
       <div class="imgctrl">
         <button class="btn small" id="uploadBtn">${s.image?"Replace":"Upload"}</button>
         ${s.image?'<button class="btn small" id="removeImgBtn">Remove</button>':""}
@@ -625,11 +663,47 @@ function renderSidebar(){
       <input type="range" id="zoomRange" min="100" max="300" step="2" value="${Math.round((s.imageScale||1)*100)}">
     </div>
     <div class="field"><button class="btn small full" id="resetCropBtn">Reset crop</button></div>
-    <div class="empty-hint">Drag the image directly in the canvas to reposition it.</div>
-    `:""}
-    <div class="field">
-      <label>Overlay <span style="font-weight:400;color:var(--muted)">(darken image behind text)</span></label>
-      ${s.image ? (s.layout==="full" ? `
+    <div class="empty-hint">Drag the photo directly in the canvas to reposition it.</div>
+
+    <div class="section-body nested">
+      <div class="field">
+        <label>Layer 2 <span style="font-weight:400;color:var(--muted)">(texture, grain, double exposure \u2014 max 2 layers)</span></label>
+        <div class="imgctrl">
+          <button class="btn small" id="uploadBtn2">${s.layer2Image?"Replace":"Add layer 2"}</button>
+          ${s.layer2Image?'<button class="btn small" id="removeLayer2Btn">Remove</button>':""}
+        </div>
+        <input type="file" accept="image/*" id="fileInput2" style="display:none">
+      </div>
+      ${s.layer2Image?`
+      <div class="field">
+        <label>Layer 2 zoom <span class="rangeval" id="zoomLabel2">${Math.round((s.layer2Scale||1)*100)}%</span></label>
+        <input type="range" id="zoomRange2" min="100" max="300" step="2" value="${Math.round((s.layer2Scale||1)*100)}">
+      </div>
+      <div class="field"><button class="btn small full" id="resetCropBtn2">Reset layer 2 crop</button></div>
+      <div class="row2">
+        <div class="field">
+          <label>Opacity <span class="rangeval" id="opacityLabel2">${s.layer2Opacity}%</span></label>
+          <input type="range" id="opacityRange2" min="0" max="100" value="${s.layer2Opacity}">
+        </div>
+        <div class="field">
+          <label>Blend mode</label>
+          <select id="blendSelect2">${Object.entries(BLEND_MODES).map(([k,v])=>`<option value="${k}" ${k===s.layer2Blend?"selected":""}>${v}</option>`).join("")}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Drag on canvas</label>
+        <div class="segmented" id="segDragLayer">
+          <button data-k="layer1" class="${s.dragLayer!=="layer2"?"active":""}">Photo</button>
+          <button data-k="layer2" class="${s.dragLayer==="layer2"?"active":""}">Layer 2</button>
+        </div>
+      </div>
+      <div class="empty-hint">Pick which layer to drag \u2014 they share the same spot on the canvas, so only one moves at a time.</div>
+      `:`<div class="empty-hint">Add a second image to blend on top of the photo (grain, texture, double exposure).</div>`}
+    </div>
+    `:`<div class="empty-hint">Upload a photo to enable zoom, reposition, overlay, and a second image layer.</div>`}
+    `)}
+    ${sec("overlay", "Overlay (darken)", `
+    ${s.image ? (s.layout==="full" ? `
       <div class="overlay-grid" id="segOverlayDir">
         ${Object.keys(OVERLAY_DIRS).map(k=>`<div class="overlay-opt ${s.overlayDirection===k?"active":""}" data-k="${k}" role="button" tabindex="0" aria-pressed="${s.overlayDirection===k}" aria-label="Overlay: ${OVERLAY_DIRS[k]}">${OVERLAY_DIRS[k]}</div>`).join("")}
       </div>
@@ -638,9 +712,10 @@ function renderSidebar(){
         <label>Overlay opacity <span class="rangeval" id="overlayLabel">${s.overlayOpacity}%</span></label>
         <input type="range" id="overlayRange" min="0" max="90" value="${s.overlayOpacity}">
       </div>
-      ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" above to enable the overlay \u2014 split layouts put text on solid color instead.</div>`
+      ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" to enable the overlay \u2014 split layouts put text on solid color instead.</div>`
       ) : `<div class="empty-hint">Upload an image on this slide to enable the overlay.</div>`}
-    </div>
+    `)}
+    ${sec("textpos", "Text position & align", `
     <div class="field">
       <label>Text position</label>
       <div class="segmented" id="segPos">
@@ -656,9 +731,37 @@ function renderSidebar(){
         <button data-k="center" class="${s.align==="center"?"active":""}">Center</button>
       </div>
     </div>
-    <div class="empty-hint">Click directly on the headline or body text in the canvas to edit it.</div>
+    `)}
+    ${sec("signature", "Signature / metadata", `
+    <div class="field">
+      <label>Text <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <input type="text" id="signatureInput" placeholder="e.g. 01 // INTRO" value="${(s.signature||"").replace(/"/g,'&quot;')}" maxlength="40">
+    </div>
+    <div class="field">
+      <label>Signature color</label>
+      <div class="colorfield"><input type="color" id="signatureColor" value="${s.signatureColor||s.textColor}"><span id="signatureColorLabel">${s.signatureColor||s.textColor}</span></div>
+    </div>
+    <div class="field">
+      <label>Signature position</label>
+      <div class="segmented" id="segSignaturePos">
+        <button data-k="top" class="${state.signaturePos==="top"?"active":""}">Top</button>
+        <button data-k="bottom" class="${state.signaturePos==="bottom"?"active":""}">Bottom</button>
+      </div>
+    </div>
+    `)}
+    ${sec("colors", "Colors", `
+    <div class="field">
+      <label>Background color</label>
+      <div class="colorfield"><input type="color" id="bgColor" value="${s.bgColor}"><span id="bgColorLabel">${s.bgColor}</span></div>
+    </div>
+    <div class="field">
+      <label>Text color</label>
+      <div class="colorfield"><input type="color" id="textColor" value="${s.textColor}"><span id="textColorLabel">${s.textColor}</span></div>
+    </div>
+    `)}
   `;
 
+  wireSectionToggles();
   document.getElementById("selAspect").onchange = e=>{ state.aspect=e.target.value; renderAll(); };
   document.getElementById("selHeadCategory").onchange = e=>{
     state.headCategory=e.target.value;
@@ -757,11 +860,41 @@ function renderSidebar(){
 
   const zoomRange = document.getElementById("zoomRange");
   if(zoomRange){
-    zoomRange.oninput = e=>{ s.imageScale = (+e.target.value)/100; document.getElementById("zoomLabel").textContent = e.target.value+"%"; refreshImageLive(); };
+    zoomRange.oninput = e=>{ s.imageScale = (+e.target.value)/100; document.getElementById("zoomLabel").textContent = e.target.value+"%"; refreshImageLiveFor(layerLiveRefs.layer1 && layerLiveRefs.layer1.imgEl, layerLiveRefs.layer1 && layerLiveRefs.layer1.r); };
     zoomRange.onchange = ()=>commitThumb(state.active);
   }
   const resetBtn = document.getElementById("resetCropBtn");
   if(resetBtn) resetBtn.onclick = ()=>{ s.imageScale=1; s.imageOffsetX=0.5; s.imageOffsetY=0.5; renderSidebar(); renderStage(); commitThumb(state.active); };
+
+  // ---- Layer 2 (texture / grain / double exposure) ----
+  const uploadBtn2 = document.getElementById("uploadBtn2");
+  if(uploadBtn2) uploadBtn2.onclick = ()=>document.getElementById("fileInput2").click();
+  const fileInput2 = document.getElementById("fileInput2");
+  if(fileInput2) fileInput2.onchange = e=>{ const file=e.target.files[0]; if(file) applyLayer2FileToActiveSlide(file); };
+  const rmBtn2 = document.getElementById("removeLayer2Btn");
+  if(rmBtn2) rmBtn2.onclick = ()=>{ s.layer2Image=null; s.layer2ImageEl=null; s.dragLayer="layer1"; renderAll(); };
+
+  const zoomRange2 = document.getElementById("zoomRange2");
+  if(zoomRange2){
+    zoomRange2.oninput = e=>{ s.layer2Scale = (+e.target.value)/100; document.getElementById("zoomLabel2").textContent = e.target.value+"%"; refreshImageLiveFor(layerLiveRefs.layer2 && layerLiveRefs.layer2.imgEl, layerLiveRefs.layer2 && layerLiveRefs.layer2.r); };
+    zoomRange2.onchange = ()=>commitThumb(state.active);
+  }
+  const resetBtn2 = document.getElementById("resetCropBtn2");
+  if(resetBtn2) resetBtn2.onclick = ()=>{ s.layer2Scale=1; s.layer2OffsetX=0.5; s.layer2OffsetY=0.5; renderSidebar(); renderStage(); commitThumb(state.active); };
+
+  const opacityRange2 = document.getElementById("opacityRange2");
+  if(opacityRange2){
+    opacityRange2.oninput = e=>{ s.layer2Opacity = +e.target.value; document.getElementById("opacityLabel2").textContent = e.target.value+"%"; renderStage(); };
+    opacityRange2.onchange = ()=>commitThumb(state.active);
+  }
+  const blendSel2 = document.getElementById("blendSelect2");
+  if(blendSel2) blendSel2.onchange = e=>{ s.layer2Blend = e.target.value; renderStage(); commitThumb(state.active); };
+
+  document.querySelectorAll("#segDragLayer button").forEach(b=>b.onclick=()=>{
+    s.dragLayer = b.dataset.k;
+    document.querySelectorAll("#segDragLayer button").forEach(x=>x.classList.toggle("active", x===b));
+    renderStage();
+  });
 
   document.querySelectorAll(".overlay-opt").forEach(opt=>{
     const activate = ()=>{
@@ -793,8 +926,9 @@ function renderSidebar(){
 }
 
 function cloneSlide(s){
-  const c = JSON.parse(JSON.stringify(s, (k,v)=> k==="imageEl" ? undefined : v));
+  const c = JSON.parse(JSON.stringify(s, (k,v)=> (k==="imageEl"||k==="layer2ImageEl") ? undefined : v));
   c.imageEl = s.imageEl;
+  c.layer2ImageEl = s.layer2ImageEl;
   return c;
 }
 
@@ -813,7 +947,12 @@ function buildSlideDOM(s, idx, editable, W){
   div.style.width = W+"px"; div.style.height = H+"px";
   div.style.background = s.bgColor;
 
+  if(editable) layerLiveRefs = {};
+
   if(s.image && s.imageEl){
+    const layer2Active = !!(s.layer2Image && s.layer2ImageEl);
+    const dragLayer1 = !layer2Active || s.dragLayer!=="layer2";
+
     const frameImg = document.createElement("div");
     frameImg.className = "frame-image" + (editable ? " editable" : "");
     frameImg.style.left = boxes.image.x+"px"; frameImg.style.top = boxes.image.y+"px";
@@ -828,8 +967,37 @@ function buildSlideDOM(s, idx, editable, W){
     div.appendChild(frameImg);
 
     if(editable){
-      stageRefs = { imgEl:img, boxW:boxes.image.w, boxH:boxes.image.h, natW:s.imageEl.naturalWidth, natH:s.imageEl.naturalHeight, s };
-      img.addEventListener("pointerdown", onImageDragStart);
+      const r = makeImgRefs(s, "", boxes.image.w, boxes.image.h, s.imageEl.naturalWidth, s.imageEl.naturalHeight);
+      img._imgRefs = r;
+      img.style.pointerEvents = dragLayer1 ? "auto" : "none";
+      if(dragLayer1) img.addEventListener("pointerdown", onImageDragStart);
+      layerLiveRefs.layer1 = { imgEl:img, r };
+    }
+
+    if(layer2Active){
+      const frameImg2 = document.createElement("div");
+      frameImg2.className = "frame-image" + (editable ? " editable" : "");
+      frameImg2.style.left = boxes.image.x+"px"; frameImg2.style.top = boxes.image.y+"px";
+      frameImg2.style.width = boxes.image.w+"px"; frameImg2.style.height = boxes.image.h+"px";
+      frameImg2.style.opacity = (s.layer2Opacity??60)/100;
+      frameImg2.style.mixBlendMode = (s.layer2Blend && s.layer2Blend!=="normal") ? s.layer2Blend : "normal";
+
+      const img2 = document.createElement("img");
+      img2.src = s.layer2Image; img2.draggable = false;
+      const cb2 = computeImageBox(s.layer2ImageEl.naturalWidth, s.layer2ImageEl.naturalHeight, boxes.image.w, boxes.image.h, s.layer2Scale||1, s.layer2OffsetX, s.layer2OffsetY);
+      img2.style.left = cb2.left+"px"; img2.style.top = cb2.top+"px";
+      img2.style.width = cb2.dw+"px"; img2.style.height = cb2.dh+"px";
+      frameImg2.appendChild(img2);
+      div.appendChild(frameImg2);
+
+      if(editable){
+        const r2 = makeImgRefs(s, "layer2", boxes.image.w, boxes.image.h, s.layer2ImageEl.naturalWidth, s.layer2ImageEl.naturalHeight);
+        img2._imgRefs = r2;
+        const dragLayer2 = s.dragLayer==="layer2";
+        img2.style.pointerEvents = dragLayer2 ? "auto" : "none";
+        if(dragLayer2) img2.addEventListener("pointerdown", onImageDragStart);
+        layerLiveRefs.layer2 = { imgEl:img2, r:r2 };
+      }
     }
 
     if((s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none"){
@@ -931,22 +1099,38 @@ function fitText(slideDiv, frameText, s){
   }
 }
 
-/* ---------- image drag / zoom (live, no full re-render) ---------- */
+/* ---------- image drag / zoom (live, no full re-render) ----------
+   Each image layer (base photo = "", texture = "layer2") gets its own refs object
+   so both can be dragged/zoomed independently without clobbering each other. */
 let dragState = null;
-function refreshImageLive(){
-  const r = stageRefs;
-  if(!r.imgEl) return;
-  const cb = computeImageBox(r.natW, r.natH, r.boxW, r.boxH, r.s.imageScale||1, r.s.imageOffsetX, r.s.imageOffsetY);
-  r.imgEl.style.left = cb.left+"px"; r.imgEl.style.top = cb.top+"px";
-  r.imgEl.style.width = cb.dw+"px"; r.imgEl.style.height = cb.dh+"px";
+function makeImgRefs(s, layerKey, boxW, boxH, natW, natH){
+  const scaleKey = layerKey ? `${layerKey}Scale` : "imageScale";
+  const offXKey = layerKey ? `${layerKey}OffsetX` : "imageOffsetX";
+  const offYKey = layerKey ? `${layerKey}OffsetY` : "imageOffsetY";
+  return {
+    s, boxW, boxH, natW, natH,
+    getScale: ()=> s[scaleKey]||1,
+    getOffX: ()=> s[offXKey] ?? 0.5,
+    getOffY: ()=> s[offYKey] ?? 0.5,
+    setOffX: v=>{ s[offXKey]=v; },
+    setOffY: v=>{ s[offYKey]=v; },
+  };
+}
+function refreshImageLiveFor(imgEl, r){
+  if(!imgEl || !r) return;
+  const cb = computeImageBox(r.natW, r.natH, r.boxW, r.boxH, r.getScale(), r.getOffX(), r.getOffY());
+  imgEl.style.left = cb.left+"px"; imgEl.style.top = cb.top+"px";
+  imgEl.style.width = cb.dw+"px"; imgEl.style.height = cb.dh+"px";
 }
 function onImageDragStart(e){
   e.preventDefault();
-  const r = stageRefs;
-  const cb = computeImageBox(r.natW, r.natH, r.boxW, r.boxH, r.s.imageScale||1, r.s.imageOffsetX, r.s.imageOffsetY);
-  dragState = { startX:e.clientX, startY:e.clientY, startOffX:r.s.imageOffsetX??0.5, startOffY:r.s.imageOffsetY??0.5, excessX:cb.excessX, excessY:cb.excessY, boxW:r.boxW, boxH:r.boxH };
-  e.target.classList.add("dragging");
-  try{ e.target.setPointerCapture(e.pointerId); }catch(err){}
+  const imgEl = e.currentTarget;
+  const r = imgEl._imgRefs;
+  if(!r) return;
+  const cb = computeImageBox(r.natW, r.natH, r.boxW, r.boxH, r.getScale(), r.getOffX(), r.getOffY());
+  dragState = { imgEl, r, startX:e.clientX, startY:e.clientY, startOffX:r.getOffX(), startOffY:r.getOffY(), excessX:cb.excessX, excessY:cb.excessY };
+  imgEl.classList.add("dragging");
+  try{ imgEl.setPointerCapture(e.pointerId); }catch(err){}
   document.addEventListener("pointermove", onImageDragMove);
   document.addEventListener("pointerup", onImageDragEnd);
   document.addEventListener("pointercancel", onImageDragEnd);
@@ -954,18 +1138,18 @@ function onImageDragStart(e){
 function onImageDragMove(e){
   if(!dragState) return;
   e.preventDefault();
-  const r = stageRefs;
+  const { r, imgEl } = dragState;
   const dx = e.clientX - dragState.startX, dy = e.clientY - dragState.startY;
-  r.s.imageOffsetX = dragState.excessX>0 ? clamp(dragState.startOffX - dx/dragState.boxW, 0, 1) : 0.5;
-  r.s.imageOffsetY = dragState.excessY>0 ? clamp(dragState.startOffY - dy/dragState.boxH, 0, 1) : 0.5;
-  refreshImageLive();
+  r.setOffX(dragState.excessX>0 ? clamp(dragState.startOffX - dx/r.boxW, 0, 1) : 0.5);
+  r.setOffY(dragState.excessY>0 ? clamp(dragState.startOffY - dy/r.boxH, 0, 1) : 0.5);
+  refreshImageLiveFor(imgEl, r);
 }
 function onImageDragEnd(){
   if(!dragState) return;
   document.removeEventListener("pointermove", onImageDragMove);
   document.removeEventListener("pointerup", onImageDragEnd);
   document.removeEventListener("pointercancel", onImageDragEnd);
-  if(stageRefs.imgEl) stageRefs.imgEl.classList.remove("dragging");
+  dragState.imgEl.classList.remove("dragging");
   dragState = null;
   commitThumb(state.active);
 }
