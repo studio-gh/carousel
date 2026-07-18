@@ -245,6 +245,9 @@
     .segmented button{ padding:10px 4px; }
     .layout-opt, .overlay-opt{ padding:9px 6px; }
     .thumb-actions button{ width:22px; height:22px; font-size:13px; }
+    .credit-bar{ bottom:auto; top:56px; right:8px; }
+    .credit{ display:none; }
+    .coffee-btn{ font-size:11px; padding:6px 9px; box-shadow:0 2px 8px rgba(0,0,0,.4); }
   }
   .credit-bar{
     position:fixed; right:16px; bottom:10px; z-index:60; display:flex; align-items:center; gap:10px;
@@ -260,7 +263,6 @@
   }
   .coffee-btn:hover{ transform:translateY(-1px); box-shadow:0 5px 14px rgba(0,0,0,.45); }
   .coffee-btn:active{ transform:scale(.96); }
-  @media (max-width: 480px){ .credit-bar{ right:10px; bottom:8px; } .credit{ display:none; } .coffee-btn{ font-size:11.5px; padding:6px 10px; } }
 </style>
 </head>
 <body>
@@ -371,7 +373,7 @@ function blankSlideDefaults(){
     imageScale:1, imageOffsetX:0.5, imageOffsetY:0.5,
     overlayDirection:"bottom", overlayOpacity:55,
     textOffsetX:0, textOffsetY:0,
-    signature:"",
+    signature:"", signatureColor:null,
     tscale:1
   };
 }
@@ -569,8 +571,21 @@ function renderSidebar(){
 
     <div class="section-label">This slide \u2014 content</div>
     <div class="field">
+      <label>Headline</label>
+      <textarea id="headingInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.heading||"")}</textarea>
+    </div>
+    <div class="field">
+      <label>Body text</label>
+      <textarea id="bodyInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.body||"")}</textarea>
+    </div>
+    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide.</div>
+    <div class="field">
       <label>Signature / metadata <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
       <input type="text" id="signatureInput" placeholder="e.g. 01 // INTRO" value="${(s.signature||"").replace(/"/g,'&quot;')}" maxlength="40">
+    </div>
+    <div class="field">
+      <label>Signature color</label>
+      <div class="colorfield"><input type="color" id="signatureColor" value="${s.signatureColor||s.textColor}"><span id="signatureColorLabel">${s.signatureColor||s.textColor}</span></div>
     </div>
     <div class="field">
       <label>Signature position</label>
@@ -697,9 +712,19 @@ function renderSidebar(){
   });
 
   const bgInput = document.getElementById("bgColor");
+  const headingInput = document.getElementById("headingInput");
+  headingInput.oninput = e=>{ s.heading = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
+  headingInput.onchange = ()=>commitThumb(state.active);
+  const bodyInput = document.getElementById("bodyInput");
+  bodyInput.oninput = e=>{ s.body = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
+  bodyInput.onchange = ()=>commitThumb(state.active);
+
   const sigInput = document.getElementById("signatureInput");
   sigInput.oninput = e=>{ s.signature = e.target.value; renderStage(); };
   sigInput.onchange = ()=>commitThumb(state.active);
+  const sigColorInput = document.getElementById("signatureColor");
+  sigColorInput.oninput = e=>{ s.signatureColor = e.target.value; document.getElementById("signatureColorLabel").textContent=e.target.value; renderStage(); };
+  sigColorInput.onchange = ()=>commitThumb(state.active);
   document.querySelectorAll("#segSignaturePos button").forEach(b=>b.onclick=()=>{
     state.signaturePos=b.dataset.k;
     document.querySelectorAll("#segSignaturePos button").forEach(x=>x.classList.toggle("active", x===b));
@@ -868,7 +893,7 @@ function buildSlideDOM(s, idx, editable, W){
     sig.className = "slide-signature";
     sig.style.left = (W*0.05)+"px";
     sig.style[state.signaturePos==="top"?"top":"bottom"] = (W*0.05)+"px";
-    sig.style.color = s.textColor;
+    sig.style.color = s.signatureColor || s.textColor;
     sig.style.fontFamily = fp.bodyFont;
     sig.style.fontSize = (W*0.022)+"px";
     sig.textContent = s.signature;
@@ -910,7 +935,7 @@ function onImageDragStart(e){
   e.preventDefault();
   const r = stageRefs;
   const cb = computeImageBox(r.natW, r.natH, r.boxW, r.boxH, r.s.imageScale||1, r.s.imageOffsetX, r.s.imageOffsetY);
-  dragState = { startX:e.clientX, startY:e.clientY, startOffX:r.s.imageOffsetX??0.5, startOffY:r.s.imageOffsetY??0.5, excessX:cb.excessX, excessY:cb.excessY };
+  dragState = { startX:e.clientX, startY:e.clientY, startOffX:r.s.imageOffsetX??0.5, startOffY:r.s.imageOffsetY??0.5, excessX:cb.excessX, excessY:cb.excessY, boxW:r.boxW, boxH:r.boxH };
   e.target.classList.add("dragging");
   try{ e.target.setPointerCapture(e.pointerId); }catch(err){}
   document.addEventListener("pointermove", onImageDragMove);
@@ -922,8 +947,8 @@ function onImageDragMove(e){
   e.preventDefault();
   const r = stageRefs;
   const dx = e.clientX - dragState.startX, dy = e.clientY - dragState.startY;
-  r.s.imageOffsetX = dragState.excessX>0 ? clamp(dragState.startOffX - dx/dragState.excessX, 0, 1) : 0.5;
-  r.s.imageOffsetY = dragState.excessY>0 ? clamp(dragState.startOffY - dy/dragState.excessY, 0, 1) : 0.5;
+  r.s.imageOffsetX = dragState.excessX>0 ? clamp(dragState.startOffX - dx/dragState.boxW, 0, 1) : 0.5;
+  r.s.imageOffsetY = dragState.excessY>0 ? clamp(dragState.startOffY - dy/dragState.boxH, 0, 1) : 0.5;
   refreshImageLive();
 }
 function onImageDragEnd(){
@@ -1163,7 +1188,7 @@ async function renderSlideCanvas(s, idx){
   if(s.signature && s.signature.trim()!==""){
     const sigPx = W*0.022;
     ctx.font = `600 ${sigPx}px "${fp.bodyName}"`;
-    ctx.fillStyle = s.textColor;
+    ctx.fillStyle = s.signatureColor || s.textColor;
     ctx.globalAlpha = 0.75;
     ctx.textAlign = "left"; ctx.textBaseline = state.signaturePos==="top" ? "top" : "bottom";
     const sigY = state.signaturePos==="top" ? W*0.05 : H - W*0.05;
@@ -1291,7 +1316,7 @@ function buildSlideSVG(s, idx){
   if(s.signature && s.signature.trim()!==""){
     const sigPx = W*0.022;
     const sigY = state.signaturePos==="top" ? W*0.05 + sigPx*0.8 : H - W*0.05;
-    body += `<text x="${(W*0.05).toFixed(1)}" y="${sigY.toFixed(1)}" font-family="${fp.bodyName}" font-weight="600" font-size="${sigPx.toFixed(1)}" fill="${s.textColor}" fill-opacity="0.75" letter-spacing="1">${escapeXML(s.signature.toUpperCase())}</text>`;
+    body += `<text x="${(W*0.05).toFixed(1)}" y="${sigY.toFixed(1)}" font-family="${fp.bodyName}" font-weight="600" font-size="${sigPx.toFixed(1)}" fill="${s.signatureColor || s.textColor}" fill-opacity="0.75" letter-spacing="1">${escapeXML(s.signature.toUpperCase())}</text>`;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${body}</svg>`;
