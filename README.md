@@ -46,3 +46,35 @@ Because the app is a single standalone file (`carousel-studio-v9e.html`), runnin
 1. **Clone the repo:**
    ```bash
    git clone [https://github.com/studio-gh/carousel.git](https://github.com/studio-gh/carousel.git)
+
+   Open the file:
+Just double-click index.html (or your current build version) to open it directly in Chrome, Safari, or Firefox. No npm install, no local servers required.
+
+🗺️ Roadmap & Upcoming Improvements (v10 Initiative)
+We are constantly pushing the limits of what a single-file app can do. Here is what we are working on for v10:
+
+🎯 P0 — Polish & Core Upgrades
+[ ] Dual Signature Systems: Simultaneous top + bottom layout bars with split text (Left/Right) and sleek separation lines.
+
+[ ] Native Undo/Redo Engine: Deep history tracking for canvas mutations.
+
+[ ] Drag-and-Drop Reordering: Smooth slide sequence manipulation directly on the track timeline view.
+
+🌟 P1 — Experience Boosters
+[ ] Project Save/Load: Quick .json state export/import to prevent losing progress on page refresh.
+
+[ ] Color Palette Extraction: Drop an image and automatically get 3-4 cohesive background/overlay color suggestions.
+
+[ ] "Story Mode" Auto-splitter: Paste a long piece of text, and watch the app intelligently chunk it into Hook -> Value Points -> CTA slides.
+
+☕ Support the Project
+Carousel Studio is open-source, free, and will never track your data or sell you subscriptions. If this tool saved you time on your content creation workflow, consider buying me a coffee to keep the engine running!
+
+Developed with ⚡ and (c)alma by Studio GH | studio-gh.github.io
+
+
+***
+
+### 💡 Dicas extras para fazer o projeto "bombar" no GitHub:
+1. **Adicione GIFs ou Prints:** O fator visual é o que mais converte desenvolvedor a dar "Star" (estrela) em repositório. Tire um print bem bonito da tela do editor rodando (com um carrossel elegante na tela) ou um pequeno GIF mostrando você arrastando a imagem por trás do texto e salve na raiz do repositório como `preview.png`. Depois, mude a segunda linha do README para incluir: `![Preview do Editor](./preview.png)`.
+2. **Preencha o "About" do repositório:** No canto superior direito da página do GitHub, clique na engrenagem em "About", coloque uma descrição curta matadora (ex: *“Zero-friction, single-file Instagram carousel generator for non-designers. No login, no cloud, pure client-side magic.”*) e adicione tags/topics importantes como `instagram-carousel`, `canvas-editor`, `vanilla-js`, `content-creation`, `no-code`.
