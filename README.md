@@ -70,11 +70,4 @@ We are constantly pushing the limits of what a single-file app can do. Here is w
 ☕ Support the Project
 Carousel Studio is open-source, free, and will never track your data or sell you subscriptions. If this tool saved you time on your content creation workflow, consider buying me a coffee to keep the engine running!
 
-Developed with ⚡ and (c)alma by Studio GH | studio-gh.github.io
-
-
-***
-
-### 💡 Dicas extras para fazer o projeto "bombar" no GitHub:
-1. **Adicione GIFs ou Prints:** O fator visual é o que mais converte desenvolvedor a dar "Star" (estrela) em repositório. Tire um print bem bonito da tela do editor rodando (com um carrossel elegante na tela) ou um pequeno GIF mostrando você arrastando a imagem por trás do texto e salve na raiz do repositório como `preview.png`. Depois, mude a segunda linha do README para incluir: `![Preview do Editor](./preview.png)`.
-2. **Preencha o "About" do repositório:** No canto superior direito da página do GitHub, clique na engrenagem em "About", coloque uma descrição curta matadora (ex: *“Zero-friction, single-file Instagram carousel generator for non-designers. No login, no cloud, pure client-side magic.”*) e adicione tags/topics importantes como `instagram-carousel`, `canvas-editor`, `vanilla-js`, `content-creation`, `no-code`.
+Developed with ⚡ and (c)alma by Studio GH | studio-gh.github.io/carousel
