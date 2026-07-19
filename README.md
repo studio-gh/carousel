@@ -16,6 +16,7 @@ Most design tools are either too complex (Figma) or too cluttered and locked beh
 - 📐 **Platform-Ready Ratios:** Instantly switch between **4:5 (Portrait)**, **1:1 (Square)**, and **9:16 (Stories/Reels)**.
 
 ---
+<img width="1862" height="1434" alt="image" src="https://github.com/user-attachments/assets/4b5ac29e-685c-47b8-9ab7-51d1237e4bda" />
 
 ## ✨ Features (v9e & Beyond)
 
