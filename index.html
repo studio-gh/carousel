@@ -170,7 +170,14 @@
   .slide-overlay.dir-radial{background:radial-gradient(circle, rgba(0,0,0,0) 35%, rgba(0,0,0,var(--ov)) 100%);}
   .slide-overlay.dir-flat{background:rgba(0,0,0,var(--ov));}
   .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible; pointer-events:none;}
-  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle{ pointer-events:auto; }
+  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle{ pointer-events:auto; }
+  .text-resize-handle{
+    position:absolute; right:-7px; bottom:-7px; width:15px; height:15px; border-radius:50%;
+    background:var(--accent-ui); border:2px solid var(--panel); cursor:nwse-resize; z-index:5;
+    box-shadow:0 1px 4px rgba(0,0,0,.4);
+  }
+  .text-resize-handle.dragging{ transform:scale(1.15); }
+  .slide-kicker{ font-weight:700; letter-spacing:.08em; text-transform:uppercase; opacity:.7; }
   .frame-text.pos-top{justify-content:flex-start;}
   .frame-text.pos-center{justify-content:center;}
   .frame-text.pos-bottom{justify-content:flex-end;}
@@ -181,6 +188,19 @@
   .slide-badge{position:absolute; border-radius:999px; display:flex; align-items:center; justify-content:center; white-space:nowrap;}
   .slide-signature-row{position:absolute; display:flex; align-items:center; gap:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; opacity:.75; box-sizing:border-box;}
   .slide-signature-side{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .slide-swipe-hint{position:absolute; display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; opacity:.7;}
+  .slide-swipe-hint .ssh-line{flex:1; height:1px; background:currentColor; opacity:.9;}
+  .slide-swipe-hint .ssh-arrow{font-size:1.3em; line-height:1;}
+  .logo-pos-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:6px; width:132px;}
+  .logo-pos-opt{
+    aspect-ratio:1; border:1px solid var(--line); border-radius:6px; background:rgba(255,252,244,.04);
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .logo-pos-opt.empty{ border:none; background:none; cursor:default; }
+  .logo-pos-opt.active{ border-color:var(--accent-ui); background:var(--accent-ui-soft); }
+  .logo-pos-opt span{ width:8px; height:8px; border-radius:2px; background:var(--muted); }
+  .logo-pos-opt.active span{ background:var(--accent-ui); }
+  .slide-logo{position:absolute; object-fit:contain; pointer-events:none;}
 
   .rail{
     display:flex; align-items:flex-end; gap:12px; padding:14px 20px; background:var(--panel);
@@ -403,7 +423,11 @@ function blankSlideDefaults(){
     textOffsetX:0, textOffsetY:0,
     signatureColor:null,
     sigTL:"", sigTR:"", sigBL:"", sigBR:"", sigDivider:true,
-    tscale:1,
+    tscale:1, fontScale:1,
+    textBoxWRatio:null, textBoxHRatio:null,
+    imageRadius:0,
+    kicker:"", kickerColor:null,
+    logoImage:null, logoImageEl:null, logoPos:"tl", logoSize:0.16,
     // Layer 2: an optional second image (texture, grain, double exposure) above the base photo
     layer2Image:null, layer2ImageEl:null,
     layer2Scale:1, layer2OffsetX:0.5, layer2OffsetY:0.5,
@@ -428,6 +452,7 @@ const state = {
   bodyFont: "Inter", bodyWeight: 400, bodyCategory: "all",
   accent: "#FFAD2A", badgeTextColor: "#1A1A1A", size: "M",
   showPageNum: true, badgePos: "bottom",
+  showSwipeHint: false, swipeHintText: "SWIPE FOR MORE", swipeHintColor: null, swipeHintHideLast: true,
   slides: defaultSlides(), active: 0,
 };
 
@@ -447,7 +472,7 @@ const HISTORY_LIMIT = 40;
 let isRestoringHistory = false;
 
 function snapshotState(){
-  return JSON.parse(JSON.stringify(state, (k,v)=> (k==="imageEl"||k==="layer2ImageEl") ? undefined : v));
+  return JSON.parse(JSON.stringify(state, (k,v)=> (k==="imageEl"||k==="layer2ImageEl"||k==="logoImageEl") ? undefined : v));
 }
 function pushHistory(){
   if(isRestoringHistory) return;
@@ -469,6 +494,7 @@ async function restoreSnapshot(snap){
   for(const s of cloned.slides){
     s.imageEl = s.image ? await loadImageEl(s.image) : null;
     s.layer2ImageEl = s.layer2Image ? await loadImageEl(s.layer2Image) : null;
+    s.logoImageEl = s.logoImage ? await loadImageEl(s.logoImage) : null;
   }
   applySnapshotInPlace(cloned);
   if(state.active >= state.slides.length) state.active = state.slides.length-1;
@@ -590,6 +616,17 @@ function applyImageFileToActiveSlide(file){
   };
   reader.readAsDataURL(file);
 }
+function applyLogoFileToActiveSlide(file){
+  if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
+  const s = state.slides[state.active];
+  const reader = new FileReader();
+  reader.onload = async ev=>{
+    s.logoImage = ev.target.result; s.logoImageEl = await loadImageEl(s.logoImage);
+    renderAll();
+    showToast("Logo added to slide " + (state.active+1));
+  };
+  reader.readAsDataURL(file);
+}
 function applyLayer2FileToActiveSlide(file){
   if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
   const s = state.slides[state.active];
@@ -622,6 +659,18 @@ function computeImageBox(natW, natH, boxW, boxH, scale, offX, offY){
   return { dw, dh, left, top, excessX, excessY };
 }
 function basePad(W){ return W*0.08; }
+function logoPosition(pos, W, H, lw, lh){
+  const pad = W*0.05;
+  switch(pos){
+    case "tl": return { x:pad, y:pad };
+    case "tr": return { x:W-pad-lw, y:pad };
+    case "bl": return { x:pad, y:H-pad-lh };
+    case "br": return { x:W-pad-lw, y:H-pad-lh };
+    case "top": return { x:(W-lw)/2, y:pad };
+    case "bottom": return { x:(W-lw)/2, y:H-pad-lh };
+    case "center": default: return { x:(W-lw)/2, y:(H-lh)/2 };
+  }
+}
 function textSizes(W, s){
   const t = SIZE_MULT[state.size] * (s.tscale||1);
   return { headPx:W*0.086*t, bodyPx:W*0.036*t, headLH:W*0.086*t*1.08, bodyLH:W*0.036*t*1.35, gap:W*0.03 };
@@ -641,7 +690,7 @@ function layoutIcon(kind){
 // Which collapsible sections start open. Persists for the session (not per-slide).
 const sidebarOpenState = {
   deck:true, typography:false, badge:false,
-  layout:true, content:true, image:true, layer2:false, overlay:false, textpos:false, signature:false, colors:false,
+  layout:true, content:true, image:true, layer2:false, logo:false, overlay:false, textpos:false, signature:false, colors:false,
 };
 function sec(id, title, innerHtml){
   const open = !!sidebarOpenState[id];
@@ -733,6 +782,24 @@ function renderSidebar(){
         <button data-k="bottom" class="${state.badgePos==="bottom"?"active":""}">Bottom</button>
       </div>
     </div>
+    <div class="field toggle-row" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+      <label style="margin:0;">"Swipe for more" footer</label>
+      <label class="switch"><input type="checkbox" id="toggleSwipeHint" ${state.showSwipeHint?"checked":""}><span class="slider-tg"></span></label>
+    </div>
+    ${state.showSwipeHint?`
+    <div class="field">
+      <label>Footer text</label>
+      <input type="text" id="swipeHintTextInput" value="${escAttr(state.swipeHintText)}" maxlength="40">
+    </div>
+    <div class="field">
+      <label>Footer color</label>
+      ${colorFieldHTML("swipeHintColor", state.swipeHintColor || "#1A1A1A")}
+    </div>
+    <div class="field toggle-row">
+      <label style="margin:0;">Hide on last slide</label>
+      <label class="switch"><input type="checkbox" id="toggleSwipeHintHideLast" ${state.swipeHintHideLast?"checked":""}><span class="slider-tg"></span></label>
+    </div>
+    `:""}
     `)}
 
     <div class="section-label">This slide</div>
@@ -748,6 +815,10 @@ function renderSidebar(){
     `)}
     ${sec("content", "Text content", `
     <div class="field">
+      <label>Kicker / label <span style="font-weight:400;color:var(--muted)">(optional, sits above the headline)</span></label>
+      <input type="text" id="kickerInput" placeholder="e.g. Fitfeed" value="${escAttr(s.kicker)}" maxlength="30">
+    </div>
+    <div class="field">
       <label>Headline</label>
       <textarea id="headingInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.heading||"")}</textarea>
     </div>
@@ -755,7 +826,11 @@ function renderSidebar(){
       <label>Body text</label>
       <textarea id="bodyInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.body||"")}</textarea>
     </div>
-    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too.</div>
+    <div class="field">
+      <label>Font size (this slide) <span class="rangeval" id="fontScaleLabel">${Math.round((s.fontScale||1)*100)}%</span></label>
+      <input type="range" id="fontScaleRange" min="60" max="170" step="5" value="${Math.round((s.fontScale||1)*100)}">
+    </div>
+    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too. Drag the dot at the corner of the text box on the canvas to resize it.</div>
     `)}
     ${sec("image", "Image", `
     <div class="field">
@@ -772,6 +847,10 @@ function renderSidebar(){
       <input type="range" id="zoomRange" min="100" max="300" step="2" value="${Math.round((s.imageScale||1)*100)}">
     </div>
     <div class="field"><button class="btn small full" id="resetCropBtn">Reset crop</button></div>
+    <div class="field">
+      <label>Corner rounding <span class="rangeval" id="imageRadiusLabel">${Math.round((s.imageRadius||0)*100)}</span></label>
+      <input type="range" id="imageRadiusRange" min="0" max="8" step="0.2" value="${((s.imageRadius||0)*100).toFixed(1)}">
+    </div>
     <div class="empty-hint">Drag the photo directly in the canvas to reposition it.</div>
 
     <div class="section-body nested">
@@ -810,6 +889,36 @@ function renderSidebar(){
       `:`<div class="empty-hint">Add a second image to blend on top of the photo (grain, texture, double exposure).</div>`}
     </div>
     `:`<div class="empty-hint">Upload a photo to enable zoom, reposition, overlay, and a second image layer.</div>`}
+    `)}
+    ${sec("logo", "Logo", `
+    <div class="field">
+      <label>Small logo <span style="font-weight:400;color:var(--muted)">(optional watermark)</span></label>
+      <div class="imgctrl">
+        <button class="btn small" id="uploadLogoBtn">${s.logoImage?"Replace":"Upload"}</button>
+        ${s.logoImage?'<button class="btn small" id="removeLogoBtn">Remove</button>':""}
+      </div>
+      <input type="file" accept="image/*" id="fileInputLogo" style="display:none">
+    </div>
+    ${s.logoImage?`
+    <div class="field">
+      <label>Size <span class="rangeval" id="logoSizeLabel">${Math.round((s.logoSize||0.16)*100)}%</span></label>
+      <input type="range" id="logoSizeRange" min="6" max="35" step="1" value="${Math.round((s.logoSize||0.16)*100)}">
+    </div>
+    <div class="field">
+      <label>Position</label>
+      <div class="logo-pos-grid" id="logoPosGrid">
+        <div class="logo-pos-opt ${s.logoPos==="tl"?"active":""}" data-k="tl" role="button" tabindex="0" aria-label="Top left"><span></span></div>
+        <div class="logo-pos-opt ${s.logoPos==="top"?"active":""}" data-k="top" role="button" tabindex="0" aria-label="Top center"><span></span></div>
+        <div class="logo-pos-opt ${s.logoPos==="tr"?"active":""}" data-k="tr" role="button" tabindex="0" aria-label="Top right"><span></span></div>
+        <div class="logo-pos-opt empty"></div>
+        <div class="logo-pos-opt ${s.logoPos==="center"?"active":""}" data-k="center" role="button" tabindex="0" aria-label="Center"><span></span></div>
+        <div class="logo-pos-opt empty"></div>
+        <div class="logo-pos-opt ${s.logoPos==="bl"?"active":""}" data-k="bl" role="button" tabindex="0" aria-label="Bottom left"><span></span></div>
+        <div class="logo-pos-opt ${s.logoPos==="bottom"?"active":""}" data-k="bottom" role="button" tabindex="0" aria-label="Bottom center"><span></span></div>
+        <div class="logo-pos-opt ${s.logoPos==="br"?"active":""}" data-k="br" role="button" tabindex="0" aria-label="Bottom right"><span></span></div>
+      </div>
+    </div>
+    `:`<div class="empty-hint">Upload a small logo to place it as a watermark \u2014 top, bottom, center, or any corner.</div>`}
     `)}
     ${sec("overlay", "Overlay (darken)", `
     ${s.image ? (s.layout==="full" ? `
@@ -929,6 +1038,16 @@ function renderSidebar(){
 
   document.getElementById("togglePageNum").onchange = e=>{ state.showPageNum=e.target.checked; renderAll(); };
   document.querySelectorAll("#segBadge button").forEach(b=>b.onclick=()=>{ state.badgePos=b.dataset.k; renderAll(); });
+  const toggleSwipeHint = document.getElementById("toggleSwipeHint");
+  if(toggleSwipeHint) toggleSwipeHint.onchange = e=>{ state.showSwipeHint=e.target.checked; renderAll(); };
+  const swipeHintTextInput = document.getElementById("swipeHintTextInput");
+  if(swipeHintTextInput){
+    swipeHintTextInput.oninput = e=>{ state.swipeHintText=e.target.value; renderStage(); };
+    swipeHintTextInput.onchange = ()=>commitThumb(state.active);
+  }
+  wireColorField("swipeHintColor", v=>{ state.swipeHintColor=v; renderStage(); }, ()=>commitThumb(state.active));
+  const toggleSwipeHintHideLast = document.getElementById("toggleSwipeHintHideLast");
+  if(toggleSwipeHintHideLast) toggleSwipeHintHideLast.onchange = e=>{ state.swipeHintHideLast=e.target.checked; renderAll(); };
 
   document.querySelectorAll(".layout-opt").forEach(opt=>{
     const activate = ()=>{ s.layout=opt.dataset.layout; renderAll(); };
@@ -936,12 +1055,22 @@ function renderSidebar(){
     opt.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); activate(); } };
   });
 
+  const kickerInput = document.getElementById("kickerInput");
+  if(kickerInput){
+    kickerInput.oninput = e=>{ s.kicker = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
+    kickerInput.onchange = ()=>commitThumb(state.active);
+  }
   const headingInput = document.getElementById("headingInput");
   headingInput.oninput = e=>{ s.heading = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
   headingInput.onchange = ()=>commitThumb(state.active);
   const bodyInput = document.getElementById("bodyInput");
   bodyInput.oninput = e=>{ s.body = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
   bodyInput.onchange = ()=>commitThumb(state.active);
+  const fontScaleRange = document.getElementById("fontScaleRange");
+  if(fontScaleRange){
+    fontScaleRange.oninput = e=>{ s.fontScale = (+e.target.value)/100; document.getElementById("fontScaleLabel").textContent = e.target.value+"%"; renderStage(); };
+    fontScaleRange.onchange = ()=>commitThumb(state.active);
+  }
 
   ["sigTL","sigTR","sigBL","sigBR"].forEach(key=>{
     const inp = document.getElementById(key);
@@ -971,6 +1100,27 @@ function renderSidebar(){
   }
   const resetBtn = document.getElementById("resetCropBtn");
   if(resetBtn) resetBtn.onclick = ()=>{ s.imageScale=1; s.imageOffsetX=0.5; s.imageOffsetY=0.5; renderSidebar(); renderStage(); commitThumb(state.active); };
+  const imageRadiusRange = document.getElementById("imageRadiusRange");
+  if(imageRadiusRange){
+    imageRadiusRange.oninput = e=>{ s.imageRadius = (+e.target.value)/100; document.getElementById("imageRadiusLabel").textContent = e.target.value; renderStage(); };
+    imageRadiusRange.onchange = ()=>commitThumb(state.active);
+  }
+
+  // ---- Logo (small watermark) ----
+  const uploadLogoBtn = document.getElementById("uploadLogoBtn");
+  if(uploadLogoBtn) uploadLogoBtn.onclick = ()=>document.getElementById("fileInputLogo").click();
+  const fileInputLogo = document.getElementById("fileInputLogo");
+  if(fileInputLogo) fileInputLogo.onchange = e=>{ const file=e.target.files[0]; if(file) applyLogoFileToActiveSlide(file); };
+  const removeLogoBtn = document.getElementById("removeLogoBtn");
+  if(removeLogoBtn) removeLogoBtn.onclick = ()=>{ s.logoImage=null; s.logoImageEl=null; renderAll(); };
+  const logoSizeRange = document.getElementById("logoSizeRange");
+  if(logoSizeRange){
+    logoSizeRange.oninput = e=>{ s.logoSize = (+e.target.value)/100; document.getElementById("logoSizeLabel").textContent = e.target.value+"%"; renderStage(); };
+    logoSizeRange.onchange = ()=>commitThumb(state.active);
+  }
+  document.querySelectorAll("#logoPosGrid .logo-pos-opt[data-k]").forEach(opt=>{
+    opt.onclick = ()=>{ s.logoPos = opt.dataset.k; renderSidebar(); renderStage(); commitThumb(state.active); };
+  });
 
   // ---- Layer 2 (texture / grain / double exposure) ----
   const uploadBtn2 = document.getElementById("uploadBtn2");
@@ -1032,9 +1182,10 @@ function renderSidebar(){
 }
 
 function cloneSlide(s){
-  const c = JSON.parse(JSON.stringify(s, (k,v)=> (k==="imageEl"||k==="layer2ImageEl") ? undefined : v));
+  const c = JSON.parse(JSON.stringify(s, (k,v)=> (k==="imageEl"||k==="layer2ImageEl"||k==="logoImageEl") ? undefined : v));
   c.imageEl = s.imageEl;
   c.layer2ImageEl = s.layer2ImageEl;
+  c.logoImageEl = s.logoImageEl;
   return c;
 }
 
@@ -1063,6 +1214,7 @@ function buildSlideDOM(s, idx, editable, W){
     frameImg.className = "frame-image" + (editable ? " editable" : "");
     frameImg.style.left = boxes.image.x+"px"; frameImg.style.top = boxes.image.y+"px";
     frameImg.style.width = boxes.image.w+"px"; frameImg.style.height = boxes.image.h+"px";
+    frameImg.style.borderRadius = ((s.imageRadius||0)*W)+"px";
 
     const img = document.createElement("img");
     img.src = s.image; img.draggable = false;
@@ -1085,6 +1237,7 @@ function buildSlideDOM(s, idx, editable, W){
       frameImg2.className = "frame-image" + (editable ? " editable" : "");
       frameImg2.style.left = boxes.image.x+"px"; frameImg2.style.top = boxes.image.y+"px";
       frameImg2.style.width = boxes.image.w+"px"; frameImg2.style.height = boxes.image.h+"px";
+      frameImg2.style.borderRadius = ((s.imageRadius||0)*W)+"px";
       frameImg2.style.opacity = (s.layer2Opacity??60)/100;
       frameImg2.style.mixBlendMode = (s.layer2Blend && s.layer2Blend!=="normal") ? s.layer2Blend : "normal";
 
@@ -1111,6 +1264,7 @@ function buildSlideDOM(s, idx, editable, W){
       ov.className = `slide-overlay dir-${s.overlayDirection}`;
       ov.style.left = boxes.image.x+"px"; ov.style.top = boxes.image.y+"px";
       ov.style.width = boxes.image.w+"px"; ov.style.height = boxes.image.h+"px";
+      ov.style.borderRadius = ((s.imageRadius||0)*W)+"px";
       ov.style.setProperty("--ov", (s.overlayOpacity??55)/100);
       div.appendChild(ov);
     }
@@ -1121,8 +1275,10 @@ function buildSlideDOM(s, idx, editable, W){
   const frameText = document.createElement("div");
   frameText.className = `frame-text pos-${s.position} align-${s.align}`;
   const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
+  const textBoxW = (s.textBoxWRatio||1) * boxes.text.w;
+  const textBoxH = (s.textBoxHRatio||1) * boxes.text.h;
   frameText.style.left = (boxes.text.x+pad+toX)+"px"; frameText.style.top = (boxes.text.y+pad+toY)+"px";
-  frameText.style.width = Math.max(10,boxes.text.w-2*pad)+"px"; frameText.style.height = Math.max(10,boxes.text.h-2*pad)+"px";
+  frameText.style.width = Math.max(10,textBoxW-2*pad)+"px"; frameText.style.height = Math.max(10,textBoxH-2*pad)+"px";
   frameText.style.gap = ts.gap+"px";
 
   if(editable){
@@ -1132,6 +1288,22 @@ function buildSlideDOM(s, idx, editable, W){
     handle.addEventListener("pointerdown", onTextDragStart);
     frameText.appendChild(handle);
     textStageRef = { frameText, s, W, H };
+
+    const resizeHandle = document.createElement("div");
+    resizeHandle.className = "text-resize-handle";
+    resizeHandle.title = "Drag to resize text box";
+    frameText.appendChild(resizeHandle);
+    attachTextResize(resizeHandle, frameText, div, s, boxes.text.w, boxes.text.h, pad);
+  }
+
+  if(s.kicker && s.kicker.trim()){
+    const kick = document.createElement("div");
+    kick.className = "slide-kicker";
+    kick.style.color = s.kickerColor || s.textColor;
+    kick.style.fontFamily = fp.bodyFont;
+    kick.style.fontSize = (W*0.026)+"px";
+    kick.textContent = s.kicker;
+    frameText.appendChild(kick);
   }
 
   const h = document.createElement("div");
@@ -1176,10 +1348,10 @@ function buildSlideDOM(s, idx, editable, W){
   const sigPad = W*0.05;
   const showTopSig = (s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim());
   const showBottomSig = (s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim());
-  function makeSigRow(edgeProp, leftText, rightText, borderProp, padProp){
+  function makeSigRow(edgeProp, leftText, rightText, borderProp, padProp, edgeOffset){
     const row = document.createElement("div");
     row.className = "slide-signature-row";
-    row.style.left = sigPad+"px"; row.style.right = sigPad+"px"; row.style[edgeProp] = sigPad+"px";
+    row.style.left = sigPad+"px"; row.style.right = sigPad+"px"; row.style[edgeProp] = (sigPad+(edgeOffset||0))+"px";
     row.style.color = sigColor; row.style.fontFamily = fp.bodyFont; row.style.fontSize = sigPx+"px";
     if(s.sigDivider!==false){
       row.style[borderProp] = `1px solid ${sigColor}`;
@@ -1190,8 +1362,36 @@ function buildSlideDOM(s, idx, editable, W){
     row.appendChild(l); row.appendChild(r);
     return row;
   }
+
+  let swipeHintH = 0;
+  const showSwipeHint = state.showSwipeHint && (state.swipeHintText||"").trim()!=="" && !(state.swipeHintHideLast && idx===state.slides.length-1);
+  if(showSwipeHint){
+    const hint = document.createElement("div");
+    hint.className = "slide-swipe-hint";
+    hint.style.left = sigPad+"px"; hint.style.right = sigPad+"px"; hint.style.bottom = sigPad+"px";
+    hint.style.color = state.swipeHintColor || s.textColor;
+    hint.style.fontFamily = fp.bodyFont; hint.style.fontSize = (W*0.02)+"px";
+    const label = document.createElement("span"); label.className="ssh-label"; label.textContent = state.swipeHintText;
+    const line = document.createElement("span"); line.className="ssh-line";
+    const arrow = document.createElement("span"); arrow.className="ssh-arrow"; arrow.innerHTML = "&#8594;";
+    hint.appendChild(label); hint.appendChild(line); hint.appendChild(arrow);
+    div.appendChild(hint);
+    swipeHintH = (W*0.02)*1.9;
+  }
+
   if(showTopSig) div.appendChild(makeSigRow("top", s.sigTL, s.sigTR, "borderBottom", "paddingBottom"));
-  if(showBottomSig) div.appendChild(makeSigRow("bottom", s.sigBL, s.sigBR, "borderTop", "paddingTop"));
+  if(showBottomSig) div.appendChild(makeSigRow("bottom", s.sigBL, s.sigBR, "borderTop", "paddingTop", swipeHintH));
+
+  if(s.logoImage && s.logoImageEl){
+    const lw = (s.logoSize||0.16)*W, lh = lw*(s.logoImageEl.naturalHeight/s.logoImageEl.naturalWidth);
+    const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
+    const logo = document.createElement("img");
+    logo.className = "slide-logo"; logo.draggable = false;
+    logo.src = s.logoImage;
+    logo.style.left = lp.x+"px"; logo.style.top = lp.y+"px";
+    logo.style.width = lw+"px"; logo.style.height = lh+"px";
+    div.appendChild(logo);
+  }
 
   if(editable){
     requestAnimationFrame(()=>fitText(div, frameText, s));
@@ -1200,7 +1400,7 @@ function buildSlideDOM(s, idx, editable, W){
 }
 
 function fitText(slideDiv, frameText, s){
-  s.tscale = 1;
+  s.tscale = s.fontScale || 1;
   let tries = 0;
   while(frameText.scrollHeight > frameText.clientHeight + 1 && s.tscale > 0.35 && tries < 60){
     s.tscale -= 0.02;
@@ -1302,6 +1502,38 @@ function onTextDragEnd(){
   textDragState = null;
   renderStage();
   commitThumb(state.active);
+}
+
+/* Resize the text box itself (distinct from repositioning it). Drag from the
+   bottom-right handle to change how much width/height the text has to wrap into. */
+function attachTextResize(handle, frameTextEl, slideDiv, s, availW, availH, pad){
+  handle.addEventListener("pointerdown", e=>{
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const startWRatio = s.textBoxWRatio || 1, startHRatio = s.textBoxHRatio || 1;
+    handle.classList.add("dragging");
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+    const onMove = ev=>{
+      ev.preventDefault();
+      const dx = ev.clientX-startX, dy = ev.clientY-startY;
+      s.textBoxWRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
+      s.textBoxHRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
+      const boxW = s.textBoxWRatio*availW, boxH = s.textBoxHRatio*availH;
+      frameTextEl.style.width = Math.max(10, boxW-2*pad)+"px";
+      frameTextEl.style.height = Math.max(10, boxH-2*pad)+"px";
+      fitText(slideDiv, frameTextEl, s);
+    };
+    const onUp = ()=>{
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      handle.classList.remove("dragging");
+      commitThumb(state.active);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  });
 }
 
 /* ============================= STAGE / RAIL RENDER ============================= */
@@ -1460,15 +1692,31 @@ async function ensureFontsReady(){
   }catch(e){}
 }
 
-function drawImageInBox(ctx, img, box, s){
+function roundRectPath(ctx, x, y, w, h, r){
+  r = Math.max(0, Math.min(r, w/2, h/2));
+  ctx.beginPath();
+  if(r<=0.01){ ctx.rect(x,y,w,h); return; }
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+function drawImageInBox(ctx, img, box, scale, offX, offY, radius){
   ctx.save();
-  ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
-  const cb = computeImageBox(img.naturalWidth, img.naturalHeight, box.w, box.h, s.imageScale||1, s.imageOffsetX, s.imageOffsetY);
+  roundRectPath(ctx, box.x, box.y, box.w, box.h, radius||0);
+  ctx.clip();
+  const cb = computeImageBox(img.naturalWidth, img.naturalHeight, box.w, box.h, scale||1, offX, offY);
   ctx.drawImage(img, box.x+cb.left, box.y+cb.top, cb.dw, cb.dh);
   ctx.restore();
 }
+function blendToCanvasOp(blend){
+  if(!blend || blend==="normal") return "source-over";
+  return blend;
+}
 
-function paintOverlayCanvas(ctx, box, dir, opacity){
+function paintOverlayCanvas(ctx, box, dir, opacity, radius){
   if(!dir || dir==="none") return;
   const {x,y,w,h} = box;
   let grad;
@@ -1477,8 +1725,8 @@ function paintOverlayCanvas(ctx, box, dir, opacity){
   else if(dir==="left"){ grad = ctx.createLinearGradient(x+w,y,x+w*0.25,y); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
   else if(dir==="right"){ grad = ctx.createLinearGradient(x,y,x+w*0.75,y); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
   else if(dir==="radial"){ grad = ctx.createRadialGradient(x+w/2,y+h/2, Math.min(w,h)*0.05, x+w/2,y+h/2, Math.max(w,h)*0.62); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(0.55,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
-  else if(dir==="flat"){ ctx.fillStyle = `rgba(0,0,0,${opacity})`; ctx.fillRect(x,y,w,h); return; }
-  if(grad){ ctx.fillStyle = grad; ctx.fillRect(x,y,w,h); }
+  else if(dir==="flat"){ ctx.save(); roundRectPath(ctx,x,y,w,h,radius||0); ctx.clip(); ctx.fillStyle = `rgba(0,0,0,${opacity})`; ctx.fillRect(x,y,w,h); ctx.restore(); return; }
+  if(grad){ ctx.save(); roundRectPath(ctx,x,y,w,h,radius||0); ctx.clip(); ctx.fillStyle = grad; ctx.fillRect(x,y,w,h); ctx.restore(); }
 }
 
 async function renderSlideCanvas(s, idx){
@@ -1498,14 +1746,27 @@ async function renderSlideCanvas(s, idx){
   if(s.image){
     let img = s.imageEl;
     if(!img || !img.complete) img = await loadImageEl(s.image);
-    drawImageInBox(ctx, img, boxes.image, s);
+    const radiusPx = (s.imageRadius||0)*W;
+    drawImageInBox(ctx, img, boxes.image, s.imageScale||1, s.imageOffsetX, s.imageOffsetY, radiusPx);
+
+    if(s.layer2Image){
+      let img2 = s.layer2ImageEl;
+      if(!img2 || !img2.complete) img2 = await loadImageEl(s.layer2Image);
+      ctx.save();
+      ctx.globalAlpha = (s.layer2Opacity??60)/100;
+      ctx.globalCompositeOperation = blendToCanvasOp(s.layer2Blend);
+      drawImageInBox(ctx, img2, boxes.image, s.layer2Scale||1, s.layer2OffsetX, s.layer2OffsetY, radiusPx);
+      ctx.restore();
+    }
+
     if((s.layout||"full")==="full"){
-      paintOverlayCanvas(ctx, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100);
+      paintOverlayCanvas(ctx, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, radiusPx);
     }
   }
 
   const pad = basePad(W);
-  const availW = boxes.text.w - 2*pad;
+  const textBoxW = (s.textBoxWRatio||1)*boxes.text.w, textBoxH = (s.textBoxHRatio||1)*boxes.text.h;
+  const availW = textBoxW - 2*pad;
   const ts = textSizes(W, s);
 
   ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
@@ -1516,10 +1777,12 @@ async function renderSlideCanvas(s, idx){
 
   const headBlockH = headLines.length*ts.headLH;
   const bodyBlockH = bodyLines.length*ts.bodyLH;
-  const totalH = headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
+  const hasKicker = s.kicker && s.kicker.trim()!=="";
+  const kickerPx = W*0.026, kickerLH = kickerPx*1.3, kickerGap = ts.gap*0.6;
+  const totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
 
   let startY;
-  const textTop = boxes.text.y + pad, textBottom = boxes.text.y + boxes.text.h - pad;
+  const textTop = boxes.text.y + pad, textBottom = boxes.text.y + textBoxH - pad;
   if(s.position==="top") startY = textTop;
   else if(s.position==="bottom") startY = textBottom - totalH;
   else startY = textTop + ((textBottom-textTop)-totalH)/2;
@@ -1529,14 +1792,23 @@ async function renderSlideCanvas(s, idx){
   const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
   ctx.textAlign = s.align==="center" ? "center" : "left";
   ctx.textBaseline = "top";
-  ctx.fillStyle = s.textColor;
 
+  let cursorY = startY;
+  if(hasKicker){
+    ctx.font = `700 ${kickerPx}px "${fp.bodyName}"`;
+    ctx.fillStyle = s.kickerColor || s.textColor;
+    ctx.globalAlpha = 0.7;
+    ctx.fillText(s.kicker.toUpperCase(), x, cursorY);
+    ctx.globalAlpha = 1;
+    cursorY += kickerLH + kickerGap;
+  }
+  ctx.fillStyle = s.textColor;
   ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
-  headLines.forEach((line,i)=>{ ctx.fillText(line, x, startY + i*ts.headLH); });
+  headLines.forEach((line,i)=>{ ctx.fillText(line, x, cursorY + i*ts.headLH); });
 
   if(hasBody){
     ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
-    const bodyStartY = startY + headBlockH + ts.gap;
+    const bodyStartY = cursorY + headBlockH + ts.gap;
     bodyLines.forEach((line,i)=>{ ctx.fillText(line, x, bodyStartY + i*ts.bodyLH); });
   }
 
@@ -1556,17 +1828,45 @@ async function renderSlideCanvas(s, idx){
     ctx.fillText(label, bx+bw/2, by+bh/2+1);
   }
 
-  function drawSigRow(isTop, leftText, rightText){
+  function drawSwipeHint(){
+    if(!state.showSwipeHint) return 0;
+    if(state.swipeHintHideLast && idx===state.slides.length-1) return 0;
+    const hintPx = W*0.02, hpad = W*0.05;
+    const color = state.swipeHintColor || s.textColor;
+    const label = (state.swipeHintText||"").toUpperCase();
+    if(!label) return 0;
+    ctx.font = `700 ${hintPx}px "${fp.bodyName}"`;
+    ctx.fillStyle = color; ctx.globalAlpha = 0.7;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    const y = H - hpad;
+    ctx.fillText(label, hpad, y);
+    const textW = ctx.measureText(label).width;
+    const lineY = y - hintPx*0.35;
+    const lineStartX = hpad + textW + hintPx*1.2;
+    const lineEndX = W - hpad - hintPx*0.9;
+    if(lineEndX > lineStartX){
+      ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, W*0.0015);
+      ctx.beginPath(); ctx.moveTo(lineStartX, lineY); ctx.lineTo(lineEndX, lineY); ctx.stroke();
+      const ah = hintPx*0.35;
+      ctx.beginPath();
+      ctx.moveTo(lineEndX, lineY-ah); ctx.lineTo(lineEndX+ah*1.3, lineY); ctx.lineTo(lineEndX, lineY+ah); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    return hintPx*1.9;
+  }
+  const swipeHintH = drawSwipeHint();
+
+  function drawSigRow(isTop, leftText, rightText, bottomOffset){
     const sigPx = W*0.022, pad = W*0.05;
     ctx.font = `600 ${sigPx}px "${fp.bodyName}"`;
     ctx.fillStyle = s.signatureColor || s.textColor;
     ctx.globalAlpha = 0.75;
     ctx.textBaseline = "alphabetic";
-    const y = isTop ? pad + sigPx*0.8 : H - pad;
+    const y = isTop ? pad + sigPx*0.8 : H - pad - (bottomOffset||0);
     if(leftText){ ctx.textAlign = "left"; ctx.fillText(leftText.toUpperCase(), pad, y); }
     if(rightText){ ctx.textAlign = "right"; ctx.fillText(rightText.toUpperCase(), W-pad, y); }
     if(s.sigDivider!==false){
-      const lineY = isTop ? pad + sigPx*1.55 : H - pad - sigPx*1.55;
+      const lineY = isTop ? pad + sigPx*1.55 : H - pad - sigPx*1.55 - (bottomOffset||0);
       ctx.globalAlpha = 0.75;
       ctx.strokeStyle = s.signatureColor || s.textColor;
       ctx.lineWidth = Math.max(1, W*0.0015);
@@ -1577,7 +1877,15 @@ async function renderSlideCanvas(s, idx){
   const showTopSig = (s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim());
   const showBottomSig = (s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim());
   if(showTopSig) drawSigRow(true, s.sigTL, s.sigTR);
-  if(showBottomSig) drawSigRow(false, s.sigBL, s.sigBR);
+  if(showBottomSig) drawSigRow(false, s.sigBL, s.sigBR, swipeHintH);
+
+  if(s.logoImage){
+    let logoImg = s.logoImageEl;
+    if(!logoImg || !logoImg.complete) logoImg = await loadImageEl(s.logoImage);
+    const lw = (s.logoSize||0.16)*W, lh = lw*(logoImg.naturalHeight/logoImg.naturalWidth);
+    const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
+    ctx.drawImage(logoImg, lp.x, lp.y, lw, lh);
+  }
 
   return canvas;
 }
@@ -1615,18 +1923,19 @@ async function exportAllPNGSeparate(){
 }
 
 /* ============================= EXPORT: SVG ============================= */
-function overlaySVG(defs, body, box, dir, opacity, gid){
+function overlaySVG(defs, body, box, dir, opacity, gid, clipId){
   if(!dir || dir==="none") return {defs, body};
   const {x,y,w,h} = box;
-  if(dir==="flat"){ body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="black" fill-opacity="${opacity.toFixed(3)}"/>`; return {defs, body}; }
+  const wrap = inner => clipId ? `<g clip-path="url(#${clipId})">${inner}</g>` : inner;
+  if(dir==="flat"){ body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="black" fill-opacity="${opacity.toFixed(3)}"/>`); return {defs, body}; }
   if(dir==="radial"){
     defs += `<radialGradient id="${gid}" cx="50%" cy="50%" r="62%"><stop offset="0" stop-color="black" stop-opacity="0"/><stop offset="55%" stop-color="black" stop-opacity="0"/><stop offset="100%" stop-color="black" stop-opacity="${opacity}"/></radialGradient>`;
-    body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${gid})"/>`;
+    body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${gid})"/>`);
     return {defs, body};
   }
   const coords = { bottom:["0","0","0","1"], top:["0","1","0","0"], left:["1","0","0","0"], right:["0","0","1","0"] }[dir];
   defs += `<linearGradient id="${gid}" x1="${coords[0]}" y1="${coords[1]}" x2="${coords[2]}" y2="${coords[3]}"><stop offset="25%" stop-color="black" stop-opacity="0"/><stop offset="100%" stop-color="black" stop-opacity="${opacity}"/></linearGradient>`;
-  body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${gid})"/>`;
+  body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${gid})"/>`);
   return {defs, body};
 }
 
@@ -1646,17 +1955,26 @@ function buildSlideSVG(s, idx){
     const natW = s.imageEl ? s.imageEl.naturalWidth : W, natH = s.imageEl ? s.imageEl.naturalHeight : H;
     const cb = computeImageBox(natW, natH, boxes.image.w, boxes.image.h, s.imageScale||1, s.imageOffsetX, s.imageOffsetY);
     const clipId = `clip${idx}`;
-    defs += `<clipPath id="${clipId}"><rect x="${boxes.image.x}" y="${boxes.image.y}" width="${boxes.image.w}" height="${boxes.image.h}"/></clipPath>`;
+    const rxPx = (s.imageRadius||0)*W;
+    defs += `<clipPath id="${clipId}"><rect x="${boxes.image.x}" y="${boxes.image.y}" width="${boxes.image.w}" height="${boxes.image.h}" rx="${rxPx.toFixed(1)}" ry="${rxPx.toFixed(1)}"/></clipPath>`;
     body += `<g clip-path="url(#${clipId})"><image href="${s.image}" x="${(boxes.image.x+cb.left).toFixed(1)}" y="${(boxes.image.y+cb.top).toFixed(1)}" width="${cb.dw.toFixed(1)}" height="${cb.dh.toFixed(1)}"/></g>`;
 
+    if(s.layer2Image){
+      const nat2W = s.layer2ImageEl ? s.layer2ImageEl.naturalWidth : W, nat2H = s.layer2ImageEl ? s.layer2ImageEl.naturalHeight : H;
+      const cb2 = computeImageBox(nat2W, nat2H, boxes.image.w, boxes.image.h, s.layer2Scale||1, s.layer2OffsetX, s.layer2OffsetY);
+      const blendAttr = (s.layer2Blend && s.layer2Blend!=="normal") ? ` style="mix-blend-mode:${s.layer2Blend}"` : "";
+      body += `<g clip-path="url(#${clipId})"${blendAttr} opacity="${((s.layer2Opacity??60)/100).toFixed(3)}"><image href="${s.layer2Image}" x="${(boxes.image.x+cb2.left).toFixed(1)}" y="${(boxes.image.y+cb2.top).toFixed(1)}" width="${cb2.dw.toFixed(1)}" height="${cb2.dh.toFixed(1)}"/></g>`;
+    }
+
     if((s.layout||"full")==="full"){
-      const res = overlaySVG(defs, body, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, `grad${idx}`);
+      const res = overlaySVG(defs, body, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, `grad${idx}`, clipId);
       defs = res.defs; body = res.body;
     }
   }
 
   const pad = basePad(W);
-  const availW = boxes.text.w - 2*pad;
+  const textBoxW = (s.textBoxWRatio||1)*boxes.text.w, textBoxH = (s.textBoxHRatio||1)*boxes.text.h;
+  const availW = textBoxW - 2*pad;
   const ts = textSizes(W, s);
 
   const measCanvas = document.createElement("canvas");
@@ -1669,9 +1987,11 @@ function buildSlideSVG(s, idx){
 
   const headBlockH = headLines.length*ts.headLH;
   const bodyBlockH = bodyLines.length*ts.bodyLH;
-  const totalH = headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
+  const hasKicker = s.kicker && s.kicker.trim()!=="";
+  const kickerPx = W*0.026, kickerLH = kickerPx*1.3, kickerGap = ts.gap*0.6;
+  const totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
 
-  const textTop = boxes.text.y + pad, textBottom = boxes.text.y + boxes.text.h - pad;
+  const textTop = boxes.text.y + pad, textBottom = boxes.text.y + textBoxH - pad;
   let startY;
   if(s.position==="top") startY = textTop;
   else if(s.position==="bottom") startY = textBottom - totalH;
@@ -1682,12 +2002,18 @@ function buildSlideSVG(s, idx){
   const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
   const anchor = s.align==="center" ? "middle" : "start";
 
-  body += `<text x="${x}" y="${startY + ts.headPx*0.86}" font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
+  let cursorY = startY;
+  if(hasKicker){
+    body += `<text x="${x}" y="${(cursorY+kickerPx*0.86).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${kickerPx.toFixed(1)}" fill="${s.kickerColor||s.textColor}" fill-opacity="0.7" letter-spacing="1.5" text-anchor="${anchor}">${escapeXML(s.kicker.toUpperCase())}</text>`;
+    cursorY += kickerLH + kickerGap;
+  }
+
+  body += `<text x="${x}" y="${cursorY + ts.headPx*0.86}" font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
   headLines.forEach((line,i)=>{ body += `<tspan x="${x}" ${i===0?"":`dy="${ts.headLH}"`}>${escapeXML(line||" ")}</tspan>`; });
   body += `</text>`;
 
   if(hasBody){
-    const bodyStartY = startY + headBlockH + ts.gap;
+    const bodyStartY = cursorY + headBlockH + ts.gap;
     body += `<text x="${x}" y="${bodyStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
     bodyLines.forEach((line,i)=>{ body += `<tspan x="${x}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
     body += `</text>`;
@@ -1706,23 +2032,55 @@ function buildSlideSVG(s, idx){
     body += `<text x="${(bx+bw/2).toFixed(1)}" y="${(by+bh/2+badgePx*0.35).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${badgePx.toFixed(1)}" fill="${state.badgeTextColor}" text-anchor="middle">${escapeXML(label)}</text>`;
   }
 
-  function sigRowSVG(isTop, leftText, rightText){
+  function sigRowSVG(isTop, leftText, rightText, bottomOffset){
     const sigPx = W*0.022, pad = W*0.05;
     const color = s.signatureColor || s.textColor;
-    const y = isTop ? pad + sigPx*0.8 : H - pad;
+    const y = isTop ? pad + sigPx*0.8 : H - pad - (bottomOffset||0);
     let out = "";
     if(leftText && leftText.trim()) out += `<text x="${pad.toFixed(1)}" y="${y.toFixed(1)}" font-family="${fp.bodyName}" font-weight="600" font-size="${sigPx.toFixed(1)}" fill="${color}" fill-opacity="0.75" letter-spacing="1" text-anchor="start">${escapeXML(leftText.toUpperCase())}</text>`;
     if(rightText && rightText.trim()) out += `<text x="${(W-pad).toFixed(1)}" y="${y.toFixed(1)}" font-family="${fp.bodyName}" font-weight="600" font-size="${sigPx.toFixed(1)}" fill="${color}" fill-opacity="0.75" letter-spacing="1" text-anchor="end">${escapeXML(rightText.toUpperCase())}</text>`;
     if(s.sigDivider!==false){
-      const lineY = isTop ? pad + sigPx*1.55 : H - pad - sigPx*1.55;
+      const lineY = isTop ? pad + sigPx*1.55 : H - pad - sigPx*1.55 - (bottomOffset||0);
       out += `<line x1="${pad.toFixed(1)}" y1="${lineY.toFixed(1)}" x2="${(W-pad).toFixed(1)}" y2="${lineY.toFixed(1)}" stroke="${color}" stroke-opacity="0.75" stroke-width="${Math.max(1,W*0.0015).toFixed(2)}"/>`;
     }
     return out;
   }
+
+  function swipeHintSVG(){
+    if(!state.showSwipeHint) return {out:"", h:0};
+    if(state.swipeHintHideLast && idx===state.slides.length-1) return {out:"", h:0};
+    const label = (state.swipeHintText||"").trim();
+    if(!label) return {out:"", h:0};
+    const hintPx = W*0.02, hpad = W*0.05;
+    const color = state.swipeHintColor || s.textColor;
+    mctx.font = `700 ${hintPx.toFixed(1)}px "${fp.bodyName}"`;
+    const textW = mctx.measureText(label.toUpperCase()).width;
+    const y = H - hpad;
+    const lineY = y - hintPx*0.35;
+    const lineStartX = hpad + textW + hintPx*1.2;
+    const lineEndX = W - hpad - hintPx*0.9;
+    let out = `<text x="${hpad.toFixed(1)}" y="${y.toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${hintPx.toFixed(1)}" fill="${color}" fill-opacity="0.7" letter-spacing="1.5" text-anchor="start">${escapeXML(label.toUpperCase())}</text>`;
+    if(lineEndX > lineStartX){
+      const ah = hintPx*0.35;
+      out += `<line x1="${lineStartX.toFixed(1)}" y1="${lineY.toFixed(1)}" x2="${lineEndX.toFixed(1)}" y2="${lineY.toFixed(1)}" stroke="${color}" stroke-opacity="0.7" stroke-width="${Math.max(1,W*0.0015).toFixed(2)}"/>`;
+      out += `<polyline points="${lineEndX.toFixed(1)},${(lineY-ah).toFixed(1)} ${(lineEndX+ah*1.3).toFixed(1)},${lineY.toFixed(1)} ${lineEndX.toFixed(1)},${(lineY+ah).toFixed(1)}" fill="none" stroke="${color}" stroke-opacity="0.7" stroke-width="${Math.max(1,W*0.0015).toFixed(2)}"/>`;
+    }
+    return {out, h: hintPx*1.9};
+  }
+  const swipeHint = swipeHintSVG();
+  body += swipeHint.out;
+
   const showTopSigSVG = (s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim());
   const showBottomSigSVG = (s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim());
   if(showTopSigSVG) body += sigRowSVG(true, s.sigTL, s.sigTR);
-  if(showBottomSigSVG) body += sigRowSVG(false, s.sigBL, s.sigBR);
+  if(showBottomSigSVG) body += sigRowSVG(false, s.sigBL, s.sigBR, swipeHint.h);
+
+  if(s.logoImage){
+    const natLW = s.logoImageEl ? s.logoImageEl.naturalWidth : 1, natLH = s.logoImageEl ? s.logoImageEl.naturalHeight : 1;
+    const lw = (s.logoSize||0.16)*W, lh = lw*(natLH/natLW);
+    const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
+    body += `<image href="${s.logoImage}" x="${lp.x.toFixed(1)}" y="${lp.y.toFixed(1)}" width="${lw.toFixed(1)}" height="${lh.toFixed(1)}"/>`;
+  }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${body}</svg>`;
 }
