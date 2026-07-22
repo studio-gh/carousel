@@ -393,7 +393,7 @@ const ASPECTS = {
   square:   { label:"Square 1:1",   w:1080, h:1080 },
   story:    { label:"Story 9:16",   w:1080, h:1920 },
 };
-const SIZE_MULT = { S:0.85, M:1, L:1.15 };
+const SIZE_MULT = { S:0.85, M:1, L:1.3 };
 const LAYOUTS = {
   full:   { label:"Full bleed" },
   left:   { label:"Image left" },
@@ -828,7 +828,7 @@ function renderSidebar(){
     </div>
     <div class="field">
       <label>Font size (this slide) <span class="rangeval" id="fontScaleLabel">${Math.round((s.fontScale||1)*100)}%</span></label>
-      <input type="range" id="fontScaleRange" min="60" max="170" step="5" value="${Math.round((s.fontScale||1)*100)}">
+      <input type="range" id="fontScaleRange" min="50" max="250" step="5" value="${Math.round((s.fontScale||1)*100)}">
     </div>
     <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too. Drag the dot at the corner of the text box on the canvas to resize it.</div>
     `)}
@@ -1401,11 +1401,19 @@ function buildSlideDOM(s, idx, editable, W){
 
 function fitText(slideDiv, frameText, s){
   s.tscale = s.fontScale || 1;
+  const heading = frameText.querySelector(".slide-heading");
+  const body = frameText.querySelector(".slide-body");
+  const kicker = frameText.querySelector(".slide-kicker");
+  const gapPx = ()=>parseFloat(getComputedStyle(frameText).gap)||0;
+  const contentHeight = ()=>{
+    let h = (heading?heading.scrollHeight:0) + (body?body.scrollHeight:0) + (kicker?kicker.scrollHeight:0);
+    const rows = [kicker,heading,body].filter(Boolean).length;
+    h += gapPx() * Math.max(0, rows-1);
+    return h;
+  };
   let tries = 0;
-  while(frameText.scrollHeight > frameText.clientHeight + 1 && s.tscale > 0.35 && tries < 60){
+  while(contentHeight() > frameText.clientHeight + 1 && s.tscale > 0.35 && tries < 60){
     s.tscale -= 0.02;
-    const heading = frameText.querySelector(".slide-heading");
-    const body = frameText.querySelector(".slide-body");
     const W = parseFloat(slideDiv.style.width);
     const ts = textSizes(W, s);
     if(heading) heading.style.fontSize = ts.headPx+"px";
