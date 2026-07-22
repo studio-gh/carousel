@@ -418,7 +418,7 @@ const BLEND_MODES = {
 function blankSlideDefaults(){
   return {
     image:null, imageEl:null, layout:"full",
-    imageScale:1, imageOffsetX:0.5, imageOffsetY:0.5,
+    imageScale:1, imageOffsetX:0.5, imageOffsetY:0.5, imageInset:0,
     overlayDirection:"bottom", overlayOpacity:55,
     textOffsetX:0, textOffsetY:0,
     signatureColor:null,
@@ -656,6 +656,20 @@ function getBoxes(layout, W, H){
     default:       return { image:{x:0,y:0,w:W,h:H}, text:{x:0,y:0,w:W,h:H} };
   }
 }
+function applyImageInset(boxes, s, W){
+  // Shrinks the image's box symmetrically from all four sides, centered within
+  // its layout slot. Position stays "predetermined" (full/left/right/top/bottom
+  // slot from getBoxes) — this only lets the photo sit smaller inside that slot,
+  // which is what makes corner rounding read correctly when it isn't glued to
+  // the slide edge. Clamped so the box can never invert.
+  const insetPx = Math.min((s.imageInset||0)*W, boxes.image.w/2-4, boxes.image.h/2-4);
+  if(insetPx>0){
+    boxes.image = {
+      x: boxes.image.x+insetPx, y: boxes.image.y+insetPx,
+      w: boxes.image.w-insetPx*2, h: boxes.image.h-insetPx*2,
+    };
+  }
+}
 function computeImageBox(natW, natH, boxW, boxH, scale, offX, offY){
   const coverScale = Math.max(boxW/natW, boxH/natH);
   const finalScale = coverScale * Math.max(1, scale||1);
@@ -702,8 +716,8 @@ function layoutIcon(kind){
 
 // Which collapsible sections start open. Persists for the session (not per-slide).
 const sidebarOpenState = {
-  deck:true, typography:false, badge:false,
-  layout:true, content:true, image:true, layer2:false, logo:false, overlay:false, textpos:false, signature:false, colors:false,
+  deck:true, badge:false,
+  layout:true, content:true, image:true, layer2:false, logo:false, overlay:false, signature:false, colors:false,
 };
 function sec(id, title, innerHtml){
   const open = !!sidebarOpenState[id];
@@ -745,32 +759,6 @@ function renderSidebar(){
         <label>Text size</label>
         <div class="segmented" id="segSize">${["S","M","L"].map(k=>`<button data-k="${k}" class="${state.size===k?"active":""}">${k}</button>`).join("")}</div>
       </div>
-    </div>
-    `)}
-    ${sec("typography", "Typography", `
-    <div class="field">
-      <label>Heading style</label>
-      <select id="selHeadCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.headCategory?"selected":""}>${v}</option>`).join("")}</select>
-    </div>
-    <div class="field">
-      <label>Heading font</label>
-      <select id="selHeadFont">${fontsInCategory(state.headCategory).map(f=>`<option value="${f.name}" ${f.name===state.headFont?"selected":""}>${f.name}</option>`).join("")}</select>
-    </div>
-    <div class="field">
-      <label>Heading weight <span class="rangeval" id="headWeightLabel">${state.headWeight}</span></label>
-      <input type="range" id="headWeightRange" min="0" max="${findFont(state.headFont).weights.length-1}" step="1" value="${findFont(state.headFont).weights.indexOf(state.headWeight)}">
-    </div>
-    <div class="field">
-      <label>Body style</label>
-      <select id="selBodyCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.bodyCategory?"selected":""}>${v}</option>`).join("")}</select>
-    </div>
-    <div class="field">
-      <label>Body font</label>
-      <select id="selBodyFont">${fontsInCategory(state.bodyCategory).map(f=>`<option value="${f.name}" ${f.name===state.bodyFont?"selected":""}>${f.name}</option>`).join("")}</select>
-    </div>
-    <div class="field">
-      <label>Body weight <span class="rangeval" id="bodyWeightLabel">${state.bodyWeight}</span></label>
-      <input type="range" id="bodyWeightRange" min="0" max="${findFont(state.bodyFont).weights.length-1}" step="1" value="${findFont(state.bodyFont).weights.indexOf(state.bodyWeight)}">
     </div>
     `)}
     ${sec("badge", "Page numbers & badge", `
@@ -826,8 +814,33 @@ function renderSidebar(){
         </div>`).join("")}
     </div>
     `)}
-    ${sec("content", "Text content", `
+    ${sec("content", "Text", `
+    <div class="empty-hint" style="margin-top:-2px;">Fonts apply to the whole deck. Everything else below is just for this slide.</div>
     <div class="field">
+      <label>Heading style</label>
+      <select id="selHeadCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.headCategory?"selected":""}>${v}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Heading font</label>
+      <select id="selHeadFont">${fontsInCategory(state.headCategory).map(f=>`<option value="${f.name}" ${f.name===state.headFont?"selected":""}>${f.name}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Heading weight <span class="rangeval" id="headWeightLabel">${state.headWeight}</span></label>
+      <input type="range" id="headWeightRange" min="0" max="${findFont(state.headFont).weights.length-1}" step="1" value="${findFont(state.headFont).weights.indexOf(state.headWeight)}">
+    </div>
+    <div class="field">
+      <label>Body style</label>
+      <select id="selBodyCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.bodyCategory?"selected":""}>${v}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Body font</label>
+      <select id="selBodyFont">${fontsInCategory(state.bodyCategory).map(f=>`<option value="${f.name}" ${f.name===state.bodyFont?"selected":""}>${f.name}</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label>Body weight <span class="rangeval" id="bodyWeightLabel">${state.bodyWeight}</span></label>
+      <input type="range" id="bodyWeightRange" min="0" max="${findFont(state.bodyFont).weights.length-1}" step="1" value="${findFont(state.bodyFont).weights.indexOf(state.bodyWeight)}">
+    </div>
+    <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>Kicker / label <span style="font-weight:400;color:var(--muted)">(optional, sits above the headline)</span></label>
       <input type="text" id="kickerInput" placeholder="e.g. Fitfeed" value="${escAttr(s.kicker)}" maxlength="30">
     </div>
@@ -850,6 +863,21 @@ function renderSidebar(){
       </div>
     </div>
     <div class="empty-hint">Leave blank to use the deck's S/M/L size. Type a number to set this slide's exact size in pixels \u2014 it'll still auto-shrink if the text overflows its box.</div>
+    <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+      <label>Text position</label>
+      <div class="segmented" id="segPos">
+        <button data-k="top" class="${s.position==="top"?"active":""}">Top</button>
+        <button data-k="center" class="${s.position==="center"?"active":""}">Center</button>
+        <button data-k="bottom" class="${s.position==="bottom"?"active":""}">Bottom</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Text align</label>
+      <div class="segmented" id="segAlign">
+        <button data-k="left" class="${s.align==="left"?"active":""}">Left</button>
+        <button data-k="center" class="${s.align==="center"?"active":""}">Center</button>
+      </div>
+    </div>
     <div class="field toggle-row" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label style="margin:0;">Detach support text from headline</label>
       <label class="switch"><input type="checkbox" id="toggleBodyDetach" ${s.bodyDetached?"checked":""}><span class="slider-tg"></span></label>
@@ -893,7 +921,11 @@ function renderSidebar(){
       <label>Corner rounding <span class="rangeval" id="imageRadiusLabel">${Math.round((s.imageRadius||0)*100)}</span></label>
       <input type="range" id="imageRadiusRange" min="0" max="8" step="0.2" value="${((s.imageRadius||0)*100).toFixed(1)}">
     </div>
-    <div class="empty-hint">Drag the photo directly in the canvas to reposition it.</div>
+    <div class="field">
+      <label>Image size <span class="rangeval" id="imageInsetLabel">${Math.round((s.imageInset||0)*100)}</span></label>
+      <input type="range" id="imageInsetRange" min="0" max="20" step="0.5" value="${((s.imageInset||0)*100).toFixed(1)}">
+    </div>
+    <div class="empty-hint">Shrinks the photo within its layout spot (stays centered, doesn't touch the slide edges) \u2014 useful so corner rounding actually shows. Drag the photo directly in the canvas to reposition it.</div>
 
     <div class="section-body nested">
       <div class="field">
@@ -974,23 +1006,6 @@ function renderSidebar(){
       </div>
       ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" to enable the overlay \u2014 split layouts put text on solid color instead.</div>`
       ) : `<div class="empty-hint">Upload an image on this slide to enable the overlay.</div>`}
-    `)}
-    ${sec("textpos", "Text position & align", `
-    <div class="field">
-      <label>Text position</label>
-      <div class="segmented" id="segPos">
-        <button data-k="top" class="${s.position==="top"?"active":""}">Top</button>
-        <button data-k="center" class="${s.position==="center"?"active":""}">Center</button>
-        <button data-k="bottom" class="${s.position==="bottom"?"active":""}">Bottom</button>
-      </div>
-    </div>
-    <div class="field">
-      <label>Text align</label>
-      <div class="segmented" id="segAlign">
-        <button data-k="left" class="${s.align==="left"?"active":""}">Left</button>
-        <button data-k="center" class="${s.align==="center"?"active":""}">Center</button>
-      </div>
-    </div>
     `)}
     ${sec("signature", "Signature / metadata", `
     <div class="empty-hint" style="margin-top:-2px;">Optional. Leave a side blank to hide it \u2014 shows both bars only if you fill them in.</div>
@@ -1178,6 +1193,11 @@ function renderSidebar(){
     imageRadiusRange.oninput = e=>{ s.imageRadius = (+e.target.value)/100; document.getElementById("imageRadiusLabel").textContent = e.target.value; renderStage(); };
     imageRadiusRange.onchange = ()=>commitThumb(state.active);
   }
+  const imageInsetRange = document.getElementById("imageInsetRange");
+  if(imageInsetRange){
+    imageInsetRange.oninput = e=>{ s.imageInset = (+e.target.value)/100; document.getElementById("imageInsetLabel").textContent = e.target.value; renderStage(); };
+    imageInsetRange.onchange = ()=>commitThumb(state.active);
+  }
 
   // ---- Logo (small watermark) ----
   const uploadLogoBtn = document.getElementById("uploadLogoBtn");
@@ -1271,6 +1291,7 @@ function buildSlideDOM(s, idx, editable, W){
     bodyFont: fontFamilyCSS(state.bodyFont), bodyWeight: state.bodyWeight, bodyName: state.bodyFont,
   };
   const boxes = getBoxes(s.layout||"full", W, H);
+  applyImageInset(boxes, s, W);
 
   const div = document.createElement("div");
   div.className = "slide";
@@ -1904,6 +1925,7 @@ async function renderSlideCanvas(s, idx){
   };
   const W = asp.w, H = asp.h;
   const boxes = getBoxes(s.layout||"full", W, H);
+  applyImageInset(boxes, s, W);
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
@@ -2135,6 +2157,7 @@ function buildSlideSVG(s, idx){
   };
   const W = asp.w, H = asp.h;
   const boxes = getBoxes(s.layout||"full", W, H);
+  applyImageInset(boxes, s, W);
   let defs = "", body = "";
 
   body += `<rect width="${W}" height="${H}" fill="${s.bgColor}"/>`;
