@@ -423,8 +423,15 @@ function blankSlideDefaults(){
     textOffsetX:0, textOffsetY:0,
     signatureColor:null,
     sigTL:"", sigTR:"", sigBL:"", sigBR:"", sigDivider:true,
-    tscale:1, fontScale:1,
+    tscale:1,
+    headSizePx:null, bodySizePx:null,
     textBoxWRatio:null, textBoxHRatio:null,
+    // Detached support text: lets "body" text live in its own box, independently
+    // positioned/sized from the headline instead of always stacking under it.
+    bodyDetached:false, bodyTscale:1,
+    bodyOffsetX:0, bodyOffsetY:0,
+    bodyBoxWRatio:null, bodyBoxHRatio:null,
+    bodyPosition:"top", bodyAlign:null,
     imageRadius:0,
     kicker:"", kickerColor:null,
     logoImage:null, logoImageEl:null, logoPos:"tl", logoSize:0.16,
@@ -459,7 +466,6 @@ const state = {
 let railThumbEls = [];
 let thumbDebounceTimer = null;
 let layerLiveRefs = {}; // { layer1:{imgEl,r}, layer2:{imgEl,r} } - refreshed each renderStage()
-let textStageRef = {};
 
 /* ============================= UNDO / REDO ============================= */
 /* Snapshot-based history: after each settled edit we store a deep clone of `state`
@@ -672,8 +678,15 @@ function logoPosition(pos, W, H, lw, lh){
   }
 }
 function textSizes(W, s){
-  const t = SIZE_MULT[state.size] * (s.tscale||1);
-  return { headPx:W*0.086*t, bodyPx:W*0.036*t, headLH:W*0.086*t*1.08, bodyLH:W*0.036*t*1.35, gap:W*0.03 };
+  // headSizePx/bodySizePx are optional per-slide numeric overrides (in px, at the
+  // canvas's base width). If unset, fall back to the deck-wide S/M/L multiplier.
+  const headBase = (s.headSizePx!=null && s.headSizePx>0) ? s.headSizePx : W*0.086*SIZE_MULT[state.size];
+  const bodyBase = (s.bodySizePx!=null && s.bodySizePx>0) ? s.bodySizePx : W*0.036*SIZE_MULT[state.size];
+  const ht = s.tscale||1;
+  // When the body text is detached into its own box, it auto-shrinks independently
+  // (its own box may be a different size than the headline's), so it needs its own scale.
+  const bt = s.bodyDetached ? (s.bodyTscale||1) : ht;
+  return { headPx:headBase*ht, bodyPx:bodyBase*bt, headLH:headBase*ht*1.08, bodyLH:bodyBase*bt*1.35, gap:W*0.03 };
 }
 
 /* ============================= SIDEBAR ============================= */
@@ -826,10 +839,39 @@ function renderSidebar(){
       <label>Body text</label>
       <textarea id="bodyInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.body||"")}</textarea>
     </div>
-    <div class="field">
-      <label>Font size (this slide) <span class="rangeval" id="fontScaleLabel">${Math.round((s.fontScale||1)*100)}%</span></label>
-      <input type="range" id="fontScaleRange" min="50" max="250" step="5" value="${Math.round((s.fontScale||1)*100)}">
+    <div class="row2">
+      <div class="field">
+        <label>Headline size (px)</label>
+        <input type="number" id="headSizeInput" placeholder="${Math.round(ASPECTS[state.aspect].w*0.086*SIZE_MULT[state.size])}" min="8" max="400" step="1" value="${s.headSizePx!=null?Math.round(s.headSizePx):""}">
+      </div>
+      <div class="field">
+        <label>Body size (px)</label>
+        <input type="number" id="bodySizeInput" placeholder="${Math.round(ASPECTS[state.aspect].w*0.036*SIZE_MULT[state.size])}" min="6" max="200" step="1" value="${s.bodySizePx!=null?Math.round(s.bodySizePx):""}">
+      </div>
     </div>
+    <div class="empty-hint">Leave blank to use the deck's S/M/L size. Type a number to set this slide's exact size in pixels \u2014 it'll still auto-shrink if the text overflows its box.</div>
+    <div class="field toggle-row" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+      <label style="margin:0;">Detach support text from headline</label>
+      <label class="switch"><input type="checkbox" id="toggleBodyDetach" ${s.bodyDetached?"checked":""}><span class="slider-tg"></span></label>
+    </div>
+    ${s.bodyDetached?`
+    <div class="empty-hint">The support text now has its own box \u2014 drag it on the canvas to place it anywhere on the slide.</div>
+    <div class="field">
+      <label>Support text position</label>
+      <div class="segmented" id="segBodyPos">
+        <button data-k="top" class="${s.bodyPosition==="top"?"active":""}">Top</button>
+        <button data-k="center" class="${s.bodyPosition==="center"?"active":""}">Center</button>
+        <button data-k="bottom" class="${s.bodyPosition==="bottom"?"active":""}">Bottom</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Support text align</label>
+      <div class="segmented" id="segBodyAlign">
+        <button data-k="left" class="${(s.bodyAlign||s.align)==="left"?"active":""}">Left</button>
+        <button data-k="center" class="${(s.bodyAlign||s.align)==="center"?"active":""}">Center</button>
+      </div>
+    </div>
+    `:``}
     <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too. Drag the dot at the corner of the text box on the canvas to resize it.</div>
     `)}
     ${sec("image", "Image", `
@@ -1066,11 +1108,42 @@ function renderSidebar(){
   const bodyInput = document.getElementById("bodyInput");
   bodyInput.oninput = e=>{ s.body = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
   bodyInput.onchange = ()=>commitThumb(state.active);
-  const fontScaleRange = document.getElementById("fontScaleRange");
-  if(fontScaleRange){
-    fontScaleRange.oninput = e=>{ s.fontScale = (+e.target.value)/100; document.getElementById("fontScaleLabel").textContent = e.target.value+"%"; renderStage(); };
-    fontScaleRange.onchange = ()=>commitThumb(state.active);
+  const headSizeInput = document.getElementById("headSizeInput");
+  if(headSizeInput){
+    headSizeInput.oninput = e=>{
+      const v = e.target.value.trim();
+      s.headSizePx = v==="" ? null : clamp(+v, 8, 400);
+      renderStage();
+    };
+    headSizeInput.onchange = ()=>commitThumb(state.active);
   }
+  const bodySizeInput = document.getElementById("bodySizeInput");
+  if(bodySizeInput){
+    bodySizeInput.oninput = e=>{
+      const v = e.target.value.trim();
+      s.bodySizePx = v==="" ? null : clamp(+v, 6, 200);
+      renderStage();
+    };
+    bodySizeInput.onchange = ()=>commitThumb(state.active);
+  }
+  const toggleBodyDetach = document.getElementById("toggleBodyDetach");
+  if(toggleBodyDetach){
+    toggleBodyDetach.onchange = e=>{
+      s.bodyDetached = e.target.checked;
+      if(s.bodyDetached){
+        // Start the detached box roughly where the inline text currently sits,
+        // so the user drags it from a sensible spot rather than from (0,0).
+        if(s.bodyOffsetX===0 && s.bodyOffsetY===0){ s.bodyOffsetX = s.textOffsetX||0; s.bodyOffsetY = (s.textOffsetY||0)+40; }
+      }
+      renderAll(); commitThumb(state.active);
+    };
+  }
+  document.querySelectorAll("#segBodyPos button").forEach(b=>b.onclick=()=>{
+    s.bodyPosition = b.dataset.k; renderAll(); commitThumb(state.active);
+  });
+  document.querySelectorAll("#segBodyAlign button").forEach(b=>b.onclick=()=>{
+    s.bodyAlign = b.dataset.k; renderAll(); commitThumb(state.active);
+  });
 
   ["sigTL","sigTR","sigBL","sigBR"].forEach(key=>{
     const inp = document.getElementById(key);
@@ -1272,6 +1345,7 @@ function buildSlideDOM(s, idx, editable, W){
 
   const pad = basePad(W);
   const ts = textSizes(W, s);
+  const detached = !!s.bodyDetached;
   const frameText = document.createElement("div");
   frameText.className = `frame-text pos-${s.position} align-${s.align}`;
   const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
@@ -1285,9 +1359,8 @@ function buildSlideDOM(s, idx, editable, W){
     const handle = document.createElement("div");
     handle.className = "text-drag-handle";
     handle.innerHTML = "&#10021;";
-    handle.addEventListener("pointerdown", onTextDragStart);
+    attachTextDrag(handle, frameText, s, "textOffsetX", "textOffsetY", W, H);
     frameText.appendChild(handle);
-    textStageRef = { frameText, s, W, H };
 
     const resizeHandle = document.createElement("div");
     resizeHandle.className = "text-resize-handle";
@@ -1316,7 +1389,8 @@ function buildSlideDOM(s, idx, editable, W){
   }
   frameText.appendChild(h);
 
-  if((s.body && s.body.trim()!=="") || editable){
+  let frameBody = null;
+  if(!detached && ((s.body && s.body.trim()!=="") || editable)){
     const p = document.createElement("div");
     p.className = "slide-body"; p.style.color = s.textColor;
     p.style.fontFamily = fp.bodyFont; p.style.fontWeight = fp.bodyWeight; p.style.fontSize = ts.bodyPx+"px"; p.style.lineHeight = "1.35";
@@ -1328,6 +1402,42 @@ function buildSlideDOM(s, idx, editable, W){
     frameText.appendChild(p);
   }
   div.appendChild(frameText);
+
+  if(detached && ((s.body && s.body.trim()!=="") || editable)){
+    const bAlign = s.bodyAlign || s.align;
+    frameBody = document.createElement("div");
+    frameBody.className = `frame-text pos-${s.bodyPosition||"top"} align-${bAlign}`;
+    const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
+    const bodyBoxW = (s.bodyBoxWRatio||1) * boxes.text.w;
+    const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.text.h;
+    frameBody.style.left = (boxes.text.x+pad+bToX)+"px"; frameBody.style.top = (boxes.text.y+pad+bToY)+"px";
+    frameBody.style.width = Math.max(10,bodyBoxW-2*pad)+"px"; frameBody.style.height = Math.max(10,bodyBoxH-2*pad)+"px";
+
+    if(editable){
+      const bHandle = document.createElement("div");
+      bHandle.className = "text-drag-handle";
+      bHandle.innerHTML = "&#10021;";
+      attachTextDrag(bHandle, frameBody, s, "bodyOffsetX", "bodyOffsetY", W, H);
+      frameBody.appendChild(bHandle);
+
+      const bResizeHandle = document.createElement("div");
+      bResizeHandle.className = "text-resize-handle";
+      bResizeHandle.title = "Drag to resize support text box";
+      frameBody.appendChild(bResizeHandle);
+      attachBodyResize(bResizeHandle, frameBody, div, s, boxes.text.w, boxes.text.h, pad);
+    }
+
+    const p = document.createElement("div");
+    p.className = "slide-body"; p.style.color = s.textColor;
+    p.style.fontFamily = fp.bodyFont; p.style.fontWeight = fp.bodyWeight; p.style.fontSize = ts.bodyPx+"px"; p.style.lineHeight = "1.35";
+    p.contentEditable = editable ? "true" : "false"; p.spellcheck = false; p.innerText = s.body;
+    if(editable){
+      p.addEventListener("input", ()=>{ s.body = p.innerText; fitDetachedBody(div, frameBody, s); scheduleThumbCommit(idx); });
+      p.addEventListener("blur", ()=>{ s.body = p.innerText; commitThumb(idx); });
+    }
+    frameBody.appendChild(p);
+    div.appendChild(frameBody);
+  }
 
   if(state.showPageNum){
     const badgePx = W*0.026;
@@ -1394,14 +1504,16 @@ function buildSlideDOM(s, idx, editable, W){
   }
 
   if(editable){
-    requestAnimationFrame(()=>fitText(div, frameText, s));
+    requestAnimationFrame(()=>{ fitText(div, frameText, s); if(frameBody) fitDetachedBody(div, frameBody, s); });
   }
   return div;
 }
 
 function fitText(slideDiv, frameText, s){
-  s.tscale = s.fontScale || 1;
+  s.tscale = 1;
   const heading = frameText.querySelector(".slide-heading");
+  // When the body is detached it lives in its own box (fit separately below),
+  // so only count it here if it's still inline with the headline.
   const body = frameText.querySelector(".slide-body");
   const kicker = frameText.querySelector(".slide-kicker");
   const gapPx = ()=>parseFloat(getComputedStyle(frameText).gap)||0;
@@ -1419,6 +1531,22 @@ function fitText(slideDiv, frameText, s){
     if(heading) heading.style.fontSize = ts.headPx+"px";
     if(body) body.style.fontSize = ts.bodyPx+"px";
     frameText.style.gap = ts.gap+"px";
+    tries++;
+  }
+}
+
+/* Same auto-shrink logic as fitText, but for the body text's own box once
+   it's been detached from the headline via "bodyDetached". */
+function fitDetachedBody(slideDiv, frameBody, s){
+  s.bodyTscale = 1;
+  const body = frameBody.querySelector(".slide-body");
+  if(!body) return;
+  let tries = 0;
+  while(body.scrollHeight > frameBody.clientHeight + 1 && s.bodyTscale > 0.35 && tries < 60){
+    s.bodyTscale -= 0.02;
+    const W = parseFloat(slideDiv.style.width);
+    const ts = textSizes(W, s);
+    body.style.fontSize = ts.bodyPx+"px";
     tries++;
   }
 }
@@ -1478,38 +1606,37 @@ function onImageDragEnd(){
   commitThumb(state.active);
 }
 
-let textDragState = null;
-function onTextDragStart(e){
-  e.preventDefault(); e.stopPropagation();
-  const r = textStageRef;
-  textDragState = { startX:e.clientX, startY:e.clientY, baseOffX:r.s.textOffsetX||0, baseOffY:r.s.textOffsetY||0, dx:0, dy:0 };
-  e.target.classList.add("dragging");
-  try{ e.target.setPointerCapture(e.pointerId); }catch(err){}
-  document.addEventListener("pointermove", onTextDragMove);
-  document.addEventListener("pointerup", onTextDragEnd);
-  document.addEventListener("pointercancel", onTextDragEnd);
-}
-function onTextDragMove(e){
-  if(!textDragState) return;
-  e.preventDefault();
-  const dx = e.clientX - textDragState.startX, dy = e.clientY - textDragState.startY;
-  textDragState.dx = dx; textDragState.dy = dy;
-  if(textStageRef.frameText) textStageRef.frameText.style.transform = `translate(${dx}px, ${dy}px)`;
-}
-function onTextDragEnd(){
-  if(!textDragState) return;
-  document.removeEventListener("pointermove", onTextDragMove);
-  document.removeEventListener("pointerup", onTextDragEnd);
-  document.removeEventListener("pointercancel", onTextDragEnd);
-  const r = textStageRef;
-  if(r.s){
-    r.s.textOffsetX = clamp(textDragState.baseOffX + textDragState.dx, -r.W*0.45, r.W*0.45);
-    r.s.textOffsetY = clamp(textDragState.baseOffY + textDragState.dy, -r.H*0.45, r.H*0.45);
-  }
-  document.querySelectorAll(".text-drag-handle.dragging").forEach(h=>h.classList.remove("dragging"));
-  textDragState = null;
-  renderStage();
-  commitThumb(state.active);
+/* Generic drag-to-reposition for a text box. Used for both the headline/kicker
+   box (offXKey/offYKey = "textOffsetX"/"textOffsetY") and, when the support text
+   is detached, its own box ("bodyOffsetX"/"bodyOffsetY") \u2014 each handle gets its
+   own closure so both boxes can be dragged independently without sharing state. */
+function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
+  handle.addEventListener("pointerdown", e=>{
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
+    let dx = 0, dy = 0;
+    handle.classList.add("dragging");
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+    const onMove = ev=>{
+      ev.preventDefault();
+      dx = ev.clientX-startX; dy = ev.clientY-startY;
+      moveEl.style.transform = `translate(${dx}px, ${dy}px)`;
+    };
+    const onUp = ()=>{
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      handle.classList.remove("dragging");
+      s[offXKey] = clamp(baseOffX + dx, -W*0.45, W*0.45);
+      s[offYKey] = clamp(baseOffY + dy, -H*0.45, H*0.45);
+      renderStage();
+      commitThumb(state.active);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  });
 }
 
 /* Resize the text box itself (distinct from repositioning it). Drag from the
@@ -1530,6 +1657,38 @@ function attachTextResize(handle, frameTextEl, slideDiv, s, availW, availH, pad)
       frameTextEl.style.width = Math.max(10, boxW-2*pad)+"px";
       frameTextEl.style.height = Math.max(10, boxH-2*pad)+"px";
       fitText(slideDiv, frameTextEl, s);
+    };
+    const onUp = ()=>{
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      handle.classList.remove("dragging");
+      commitThumb(state.active);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  });
+}
+
+/* Same as attachTextResize, but resizes the detached body box (bodyBoxWRatio/HRatio)
+   and re-fits with fitDetachedBody instead of fitText. */
+function attachBodyResize(handle, frameBodyEl, slideDiv, s, availW, availH, pad){
+  handle.addEventListener("pointerdown", e=>{
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const startWRatio = s.bodyBoxWRatio || 1, startHRatio = s.bodyBoxHRatio || 1;
+    handle.classList.add("dragging");
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+    const onMove = ev=>{
+      ev.preventDefault();
+      const dx = ev.clientX-startX, dy = ev.clientY-startY;
+      s.bodyBoxWRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
+      s.bodyBoxHRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
+      const boxW = s.bodyBoxWRatio*availW, boxH = s.bodyBoxHRatio*availH;
+      frameBodyEl.style.width = Math.max(10, boxW-2*pad)+"px";
+      frameBodyEl.style.height = Math.max(10, boxH-2*pad)+"px";
+      fitDetachedBody(slideDiv, frameBodyEl, s);
     };
     const onUp = ()=>{
       document.removeEventListener("pointermove", onMove);
@@ -1779,7 +1938,8 @@ async function renderSlideCanvas(s, idx){
 
   ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
   const headLines = wrapLines(ctx, s.heading||"", availW);
-  const hasBody = s.body && s.body.trim()!=="";
+  const detached = !!s.bodyDetached;
+  const hasBody = !detached && s.body && s.body.trim()!=="";
   ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
   const bodyLines = hasBody ? wrapLines(ctx, s.body, availW) : [];
 
@@ -1818,6 +1978,26 @@ async function renderSlideCanvas(s, idx){
     ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
     const bodyStartY = cursorY + headBlockH + ts.gap;
     bodyLines.forEach((line,i)=>{ ctx.fillText(line, x, bodyStartY + i*ts.bodyLH); });
+  }
+
+  if(detached && s.body && s.body.trim()!==""){
+    const bAlign = s.bodyAlign || s.align;
+    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.text.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.text.h;
+    const bAvailW = bodyBoxW - 2*pad;
+    ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
+    const dBodyLines = wrapLines(ctx, s.body, bAvailW);
+    const dBodyBlockH = dBodyLines.length*ts.bodyLH;
+    const bTextTop = boxes.text.y + pad, bTextBottom = boxes.text.y + bodyBoxH - pad;
+    let bStartY;
+    if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
+    else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
+    else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
+    const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
+    bStartY += bToY;
+    const bx = (bAlign==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + bToX;
+    ctx.textAlign = bAlign==="center" ? "center" : "left";
+    ctx.fillStyle = s.textColor;
+    dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx, bStartY + i*ts.bodyLH); });
   }
 
   if(state.showPageNum){
@@ -1989,7 +2169,8 @@ function buildSlideSVG(s, idx){
   const mctx = measCanvas.getContext("2d");
   mctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
   const headLines = wrapLines(mctx, s.heading||"", availW);
-  const hasBody = s.body && s.body.trim()!=="";
+  const detached = !!s.bodyDetached;
+  const hasBody = !detached && s.body && s.body.trim()!=="";
   mctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
   const bodyLines = hasBody ? wrapLines(mctx, s.body, availW) : [];
 
@@ -2024,6 +2205,27 @@ function buildSlideSVG(s, idx){
     const bodyStartY = cursorY + headBlockH + ts.gap;
     body += `<text x="${x}" y="${bodyStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
     bodyLines.forEach((line,i)=>{ body += `<tspan x="${x}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
+    body += `</text>`;
+  }
+
+  if(detached && s.body && s.body.trim()!==""){
+    const bAlign = s.bodyAlign || s.align;
+    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.text.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.text.h;
+    const bAvailW = bodyBoxW - 2*pad;
+    mctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
+    const dBodyLines = wrapLines(mctx, s.body, bAvailW);
+    const dBodyBlockH = dBodyLines.length*ts.bodyLH;
+    const bTextTop = boxes.text.y + pad, bTextBottom = boxes.text.y + bodyBoxH - pad;
+    let bStartY;
+    if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
+    else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
+    else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
+    const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
+    bStartY += bToY;
+    const bx = (bAlign==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + bToX;
+    const bAnchor = bAlign==="center" ? "middle" : "start";
+    body += `<text x="${bx}" y="${bStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${bAnchor}">`;
+    dBodyLines.forEach((line,i)=>{ body += `<tspan x="${bx}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
     body += `</text>`;
   }
 
