@@ -395,11 +395,12 @@ const ASPECTS = {
 };
 const SIZE_MULT = { S:0.85, M:1, L:1.3 };
 const LAYOUTS = {
-  full:   { label:"Full bleed" },
-  left:   { label:"Image left" },
-  right:  { label:"Image right" },
-  top:    { label:"Image top" },
-  bottom: { label:"Image bottom" },
+  full:      { label:"Full bleed" },
+  left:      { label:"Image left" },
+  right:     { label:"Image right" },
+  top:       { label:"Image top" },
+  bottom:    { label:"Image bottom" },
+  editorial: { label:"Editorial" },
 };
 const OVERLAY_DIRS = {
   none:   "None",
@@ -545,6 +546,23 @@ function colorFieldHTML(id, value){
     <input type="text" class="hexinput" id="${id}Hex" value="${v}" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Hex color code">
   </div>`;
 }
+/* Renders a ".field" block with a labeled range slider and its live value readout.
+   rangeId must end in "Range" (e.g. "zoomRange") — the readout span id is derived
+   by swapping that suffix for "Label" (e.g. "zoomLabel"), matching the existing
+   id convention used by all the oninput handlers in renderSidebar(). */
+function rangeField(rangeId, label, min, max, step, value, display){
+  const labelId = rangeId.replace("Range","Label");
+  return `<div class="field">
+      <label>${label} <span class="rangeval" id="${labelId}">${display}</span></label>
+      <input type="range" id="${rangeId}" min="${min}" max="${max}" step="${step}" value="${value}">
+    </div>`;
+}
+/* Renders a ".segmented" button group. options: [{k, label, active}]. */
+function segmented(id, options){
+  return `<div class="segmented" id="${id}">${options.map(o=>`<button data-k="${o.k}" class="${o.active?"active":""}">${o.label}</button>`).join("")}</div>`;
+}
+/* Shared inline style for the headline/body textareas in the Text section. */
+const TA_STYLE = "width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;";
 /* Wire a colorFieldHTML() pair together: picking a color updates the hex text, and typing a
    valid hex code (with or without '#') updates the swatch. onChange fires with the new value
    on every valid update; onCommit fires once editing settles (for undo history / thumb refresh). */
@@ -648,13 +666,31 @@ function applyLayer2FileToActiveSlide(file){
   reader.readAsDataURL(file);
 }
 function getBoxes(layout, W, H){
+  // `body` is an optional third region, distinct from `text`, used only by layouts
+  // that need the headline and support text to live in separate areas (e.g.
+  // "editorial"'s two columns). Every other layout leaves it unset and gets
+  // `body = text` below, so headline+body keep sharing one box exactly like before.
+  let boxes;
   switch(layout){
-    case "left":   return { image:{x:0,y:0,w:W/2,h:H}, text:{x:W/2,y:0,w:W/2,h:H} };
-    case "right":  return { image:{x:W/2,y:0,w:W/2,h:H}, text:{x:0,y:0,w:W/2,h:H} };
-    case "top":    return { image:{x:0,y:0,w:W,h:H/2}, text:{x:0,y:H/2,w:W,h:H/2} };
-    case "bottom": return { image:{x:0,y:H/2,w:W,h:H/2}, text:{x:0,y:0,w:W,h:H/2} };
-    default:       return { image:{x:0,y:0,w:W,h:H}, text:{x:0,y:0,w:W,h:H} };
+    case "left":   boxes = { image:{x:0,y:0,w:W/2,h:H}, text:{x:W/2,y:0,w:W/2,h:H} }; break;
+    case "right":  boxes = { image:{x:W/2,y:0,w:W/2,h:H}, text:{x:0,y:0,w:W/2,h:H} }; break;
+    case "top":    boxes = { image:{x:0,y:0,w:W,h:H/2}, text:{x:0,y:H/2,w:W,h:H/2} }; break;
+    case "bottom": boxes = { image:{x:0,y:H/2,w:W,h:H/2}, text:{x:0,y:0,w:W,h:H/2} }; break;
+    case "editorial": {
+      // Large image on top, headline (left column) and support text (right column)
+      // sharing the strip below it.
+      const textY = H*0.56, textH = H*0.44, gap = W*0.04, colW = (W-gap)/2;
+      boxes = {
+        image:{x:0,y:0,w:W,h:textY},
+        text:{x:0,y:textY,w:colW,h:textH},
+        body:{x:colW+gap,y:textY,w:colW,h:textH},
+      };
+      break;
+    }
+    default: boxes = { image:{x:0,y:0,w:W,h:H}, text:{x:0,y:0,w:W,h:H} };
   }
+  if(!boxes.body) boxes.body = boxes.text;
+  return boxes;
 }
 function applyImageInset(boxes, s, W){
   // Shrinks the image's box symmetrically from all four sides, centered within
@@ -712,6 +748,7 @@ function layoutIcon(kind){
   if(kind==="right") return box(`<rect x="50" width="50" height="60" fill="${IMG}"/><rect x="8" y="24" width="34" height="6" fill="${LINE}"/><rect x="8" y="34" width="24" height="5" fill="${LINE}" opacity=".55"/>`);
   if(kind==="top") return box(`<rect width="100" height="30" fill="${IMG}"/><rect x="8" y="40" width="50" height="6" fill="${LINE}"/>`);
   if(kind==="bottom") return box(`<rect y="30" width="100" height="30" fill="${IMG}"/><rect x="8" y="12" width="50" height="6" fill="${LINE}"/>`);
+  if(kind==="editorial") return box(`<rect width="100" height="34" fill="${IMG}"/><rect x="8" y="42" width="38" height="6" fill="${LINE}"/><rect x="8" y="51" width="28" height="5" fill="${LINE}" opacity=".55"/><rect x="54" y="42" width="38" height="5" fill="${LINE}" opacity=".55"/><rect x="54" y="50" width="38" height="5" fill="${LINE}" opacity=".55"/>`);
 }
 
 // Which collapsible sections start open. Persists for the session (not per-slide).
@@ -757,7 +794,7 @@ function renderSidebar(){
       </div>
       <div class="field">
         <label>Text size</label>
-        <div class="segmented" id="segSize">${["S","M","L"].map(k=>`<button data-k="${k}" class="${state.size===k?"active":""}">${k}</button>`).join("")}</div>
+        ${segmented("segSize", ["S","M","L"].map(k=>({k, label:k, active:state.size===k})))}
       </div>
     </div>
     `)}
@@ -778,10 +815,10 @@ function renderSidebar(){
     </div>
     <div class="field" id="badgePosField" ${state.showPageNum?"":"style=display:none"}>
       <label>Badge position</label>
-      <div class="segmented" id="segBadge">
-        <button data-k="top" class="${state.badgePos==="top"?"active":""}">Top</button>
-        <button data-k="bottom" class="${state.badgePos==="bottom"?"active":""}">Bottom</button>
-      </div>
+      ${segmented("segBadge", [
+        {k:"top", label:"Top", active:state.badgePos==="top"},
+        {k:"bottom", label:"Bottom", active:state.badgePos==="bottom"},
+      ])}
     </div>
     <div class="field toggle-row" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label style="margin:0;">"Swipe for more" footer</label>
@@ -824,10 +861,7 @@ function renderSidebar(){
       <label>Heading font</label>
       <select id="selHeadFont">${fontsInCategory(state.headCategory).map(f=>`<option value="${f.name}" ${f.name===state.headFont?"selected":""}>${f.name}</option>`).join("")}</select>
     </div>
-    <div class="field">
-      <label>Heading weight <span class="rangeval" id="headWeightLabel">${state.headWeight}</span></label>
-      <input type="range" id="headWeightRange" min="0" max="${findFont(state.headFont).weights.length-1}" step="1" value="${findFont(state.headFont).weights.indexOf(state.headWeight)}">
-    </div>
+    ${rangeField("headWeightRange", "Heading weight", 0, findFont(state.headFont).weights.length-1, 1, findFont(state.headFont).weights.indexOf(state.headWeight), state.headWeight)}
     <div class="field">
       <label>Body style</label>
       <select id="selBodyCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.bodyCategory?"selected":""}>${v}</option>`).join("")}</select>
@@ -836,21 +870,18 @@ function renderSidebar(){
       <label>Body font</label>
       <select id="selBodyFont">${fontsInCategory(state.bodyCategory).map(f=>`<option value="${f.name}" ${f.name===state.bodyFont?"selected":""}>${f.name}</option>`).join("")}</select>
     </div>
-    <div class="field">
-      <label>Body weight <span class="rangeval" id="bodyWeightLabel">${state.bodyWeight}</span></label>
-      <input type="range" id="bodyWeightRange" min="0" max="${findFont(state.bodyFont).weights.length-1}" step="1" value="${findFont(state.bodyFont).weights.indexOf(state.bodyWeight)}">
-    </div>
+    ${rangeField("bodyWeightRange", "Body weight", 0, findFont(state.bodyFont).weights.length-1, 1, findFont(state.bodyFont).weights.indexOf(state.bodyWeight), state.bodyWeight)}
     <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>Kicker / label <span style="font-weight:400;color:var(--muted)">(optional, sits above the headline)</span></label>
       <input type="text" id="kickerInput" placeholder="e.g. Fitfeed" value="${escAttr(s.kicker)}" maxlength="30">
     </div>
     <div class="field">
       <label>Headline</label>
-      <textarea id="headingInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.heading||"")}</textarea>
+      <textarea id="headingInput" rows="3" style="${TA_STYLE}">${escapeXML(s.heading||"")}</textarea>
     </div>
     <div class="field">
       <label>Body text</label>
-      <textarea id="bodyInput" rows="3" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;">${escapeXML(s.body||"")}</textarea>
+      <textarea id="bodyInput" rows="3" style="${TA_STYLE}">${escapeXML(s.body||"")}</textarea>
     </div>
     <div class="row2">
       <div class="field">
@@ -865,18 +896,18 @@ function renderSidebar(){
     <div class="empty-hint">Leave blank to use the deck's S/M/L size. Type a number to set this slide's exact size in pixels \u2014 it'll still auto-shrink if the text overflows its box.</div>
     <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>Text position</label>
-      <div class="segmented" id="segPos">
-        <button data-k="top" class="${s.position==="top"?"active":""}">Top</button>
-        <button data-k="center" class="${s.position==="center"?"active":""}">Center</button>
-        <button data-k="bottom" class="${s.position==="bottom"?"active":""}">Bottom</button>
-      </div>
+      ${segmented("segPos", [
+        {k:"top", label:"Top", active:s.position==="top"},
+        {k:"center", label:"Center", active:s.position==="center"},
+        {k:"bottom", label:"Bottom", active:s.position==="bottom"},
+      ])}
     </div>
     <div class="field">
       <label>Text align</label>
-      <div class="segmented" id="segAlign">
-        <button data-k="left" class="${s.align==="left"?"active":""}">Left</button>
-        <button data-k="center" class="${s.align==="center"?"active":""}">Center</button>
-      </div>
+      ${segmented("segAlign", [
+        {k:"left", label:"Left", active:s.align==="left"},
+        {k:"center", label:"Center", active:s.align==="center"},
+      ])}
     </div>
     <div class="field toggle-row" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label style="margin:0;">Detach support text from headline</label>
@@ -886,18 +917,18 @@ function renderSidebar(){
     <div class="empty-hint">The support text now has its own box \u2014 drag it on the canvas to place it anywhere on the slide.</div>
     <div class="field">
       <label>Support text position</label>
-      <div class="segmented" id="segBodyPos">
-        <button data-k="top" class="${s.bodyPosition==="top"?"active":""}">Top</button>
-        <button data-k="center" class="${s.bodyPosition==="center"?"active":""}">Center</button>
-        <button data-k="bottom" class="${s.bodyPosition==="bottom"?"active":""}">Bottom</button>
-      </div>
+      ${segmented("segBodyPos", [
+        {k:"top", label:"Top", active:s.bodyPosition==="top"},
+        {k:"center", label:"Center", active:s.bodyPosition==="center"},
+        {k:"bottom", label:"Bottom", active:s.bodyPosition==="bottom"},
+      ])}
     </div>
     <div class="field">
       <label>Support text align</label>
-      <div class="segmented" id="segBodyAlign">
-        <button data-k="left" class="${(s.bodyAlign||s.align)==="left"?"active":""}">Left</button>
-        <button data-k="center" class="${(s.bodyAlign||s.align)==="center"?"active":""}">Center</button>
-      </div>
+      ${segmented("segBodyAlign", [
+        {k:"left", label:"Left", active:(s.bodyAlign||s.align)==="left"},
+        {k:"center", label:"Center", active:(s.bodyAlign||s.align)==="center"},
+      ])}
     </div>
     `:``}
     <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too. Drag the dot at the corner of the text box on the canvas to resize it.</div>
@@ -912,19 +943,10 @@ function renderSidebar(){
       <input type="file" accept="image/*" id="fileInput" style="display:none">
     </div>
     ${s.image?`
-    <div class="field">
-      <label>Zoom <span class="rangeval" id="zoomLabel">${Math.round((s.imageScale||1)*100)}%</span></label>
-      <input type="range" id="zoomRange" min="100" max="300" step="2" value="${Math.round((s.imageScale||1)*100)}">
-    </div>
+    ${rangeField("zoomRange", "Zoom", 100, 300, 2, Math.round((s.imageScale||1)*100), Math.round((s.imageScale||1)*100)+"%")}
     <div class="field"><button class="btn small full" id="resetCropBtn">Reset crop</button></div>
-    <div class="field">
-      <label>Corner rounding <span class="rangeval" id="imageRadiusLabel">${Math.round((s.imageRadius||0)*100)}</span></label>
-      <input type="range" id="imageRadiusRange" min="0" max="8" step="0.2" value="${((s.imageRadius||0)*100).toFixed(1)}">
-    </div>
-    <div class="field">
-      <label>Image size <span class="rangeval" id="imageInsetLabel">${Math.round((s.imageInset||0)*100)}</span></label>
-      <input type="range" id="imageInsetRange" min="0" max="20" step="0.5" value="${((s.imageInset||0)*100).toFixed(1)}">
-    </div>
+    ${rangeField("imageRadiusRange", "Corner rounding", 0, 8, 0.2, ((s.imageRadius||0)*100).toFixed(1), Math.round((s.imageRadius||0)*100))}
+    ${rangeField("imageInsetRange", "Image size", 0, 20, 0.5, ((s.imageInset||0)*100).toFixed(1), Math.round((s.imageInset||0)*100))}
     <div class="empty-hint">Shrinks the photo within its layout spot (stays centered, doesn't touch the slide edges) \u2014 useful so corner rounding actually shows. Drag the photo directly in the canvas to reposition it.</div>
 
     <div class="section-body nested">
@@ -937,16 +959,10 @@ function renderSidebar(){
         <input type="file" accept="image/*" id="fileInput2" style="display:none">
       </div>
       ${s.layer2Image?`
-      <div class="field">
-        <label>Layer 2 zoom <span class="rangeval" id="zoomLabel2">${Math.round((s.layer2Scale||1)*100)}%</span></label>
-        <input type="range" id="zoomRange2" min="100" max="300" step="2" value="${Math.round((s.layer2Scale||1)*100)}">
-      </div>
+      ${rangeField("zoomRange2", "Layer 2 zoom", 100, 300, 2, Math.round((s.layer2Scale||1)*100), Math.round((s.layer2Scale||1)*100)+"%")}
       <div class="field"><button class="btn small full" id="resetCropBtn2">Reset layer 2 crop</button></div>
       <div class="row2">
-        <div class="field">
-          <label>Opacity <span class="rangeval" id="opacityLabel2">${s.layer2Opacity}%</span></label>
-          <input type="range" id="opacityRange2" min="0" max="100" value="${s.layer2Opacity}">
-        </div>
+        ${rangeField("opacityRange2", "Opacity", 0, 100, 1, s.layer2Opacity, s.layer2Opacity+"%")}
         <div class="field">
           <label>Blend mode</label>
           <select id="blendSelect2">${Object.entries(BLEND_MODES).map(([k,v])=>`<option value="${k}" ${k===s.layer2Blend?"selected":""}>${v}</option>`).join("")}</select>
@@ -954,10 +970,10 @@ function renderSidebar(){
       </div>
       <div class="field">
         <label>Drag on canvas</label>
-        <div class="segmented" id="segDragLayer">
-          <button data-k="layer1" class="${s.dragLayer!=="layer2"?"active":""}">Photo</button>
-          <button data-k="layer2" class="${s.dragLayer==="layer2"?"active":""}">Layer 2</button>
-        </div>
+        ${segmented("segDragLayer", [
+          {k:"layer1", label:"Photo", active:s.dragLayer!=="layer2"},
+          {k:"layer2", label:"Layer 2", active:s.dragLayer==="layer2"},
+        ])}
       </div>
       <div class="empty-hint">Pick which layer to drag \u2014 they share the same spot on the canvas, so only one moves at a time.</div>
       `:`<div class="empty-hint">Add a second image to blend on top of the photo (grain, texture, double exposure).</div>`}
@@ -974,10 +990,7 @@ function renderSidebar(){
       <input type="file" accept="image/*" id="fileInputLogo" style="display:none">
     </div>
     ${s.logoImage?`
-    <div class="field">
-      <label>Size <span class="rangeval" id="logoSizeLabel">${Math.round((s.logoSize||0.16)*100)}%</span></label>
-      <input type="range" id="logoSizeRange" min="6" max="35" step="1" value="${Math.round((s.logoSize||0.16)*100)}">
-    </div>
+    ${rangeField("logoSizeRange", "Size", 6, 35, 1, Math.round((s.logoSize||0.16)*100), Math.round((s.logoSize||0.16)*100)+"%")}
     <div class="field">
       <label>Position</label>
       <div class="logo-pos-grid" id="logoPosGrid">
@@ -1000,9 +1013,8 @@ function renderSidebar(){
         ${Object.keys(OVERLAY_DIRS).map(k=>`<div class="overlay-opt ${s.overlayDirection===k?"active":""}" data-k="${k}" role="button" tabindex="0" aria-pressed="${s.overlayDirection===k}" aria-label="Overlay: ${OVERLAY_DIRS[k]}">${OVERLAY_DIRS[k]}</div>`).join("")}
       </div>
       <div class="empty-hint">"Flat" is a solid darken. The others fade from clear to dark in that direction \u2014 use the opacity slider below to adjust strength.</div>
-      <div class="field" id="overlayOpacityField" ${s.overlayDirection==="none"?"style=display:none":""}>
-        <label>Overlay opacity <span class="rangeval" id="overlayLabel">${s.overlayOpacity}%</span></label>
-        <input type="range" id="overlayRange" min="0" max="90" value="${s.overlayOpacity}">
+      <div id="overlayOpacityField" ${s.overlayDirection==="none"?"style=display:none":""}>
+        ${rangeField("overlayRange", "Overlay opacity", 0, 90, 1, s.overlayOpacity, s.overlayOpacity+"%")}
       </div>
       ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" to enable the overlay \u2014 split layouts put text on solid color instead.</div>`
       ) : `<div class="empty-hint">Upload an image on this slide to enable the overlay.</div>`}
@@ -1107,7 +1119,14 @@ function renderSidebar(){
   if(toggleSwipeHintHideLast) toggleSwipeHintHideLast.onchange = e=>{ state.swipeHintHideLast=e.target.checked; renderAll(); };
 
   document.querySelectorAll(".layout-opt").forEach(opt=>{
-    const activate = ()=>{ s.layout=opt.dataset.layout; renderAll(); };
+    const activate = ()=>{
+      s.layout = opt.dataset.layout;
+      if(s.layout==="editorial"){
+        if(!s.bodyDetached) s.bodyDetached = true;
+        if(!s.bodyAlign) s.bodyAlign = "left";
+      }
+      renderAll();
+    };
     opt.onclick = activate;
     opt.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); activate(); } };
   });
@@ -1425,13 +1444,13 @@ function buildSlideDOM(s, idx, editable, W){
   div.appendChild(frameText);
 
   if(detached && ((s.body && s.body.trim()!=="") || editable)){
-    const bAlign = s.bodyAlign || s.align;
+    const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     frameBody = document.createElement("div");
     frameBody.className = `frame-text pos-${s.bodyPosition||"top"} align-${bAlign}`;
     const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
-    const bodyBoxW = (s.bodyBoxWRatio||1) * boxes.text.w;
-    const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.text.h;
-    frameBody.style.left = (boxes.text.x+pad+bToX)+"px"; frameBody.style.top = (boxes.text.y+pad+bToY)+"px";
+    const bodyBoxW = (s.bodyBoxWRatio||1) * boxes.body.w;
+    const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.body.h;
+    frameBody.style.left = (boxes.body.x+pad+bToX)+"px"; frameBody.style.top = (boxes.body.y+pad+bToY)+"px";
     frameBody.style.width = Math.max(10,bodyBoxW-2*pad)+"px"; frameBody.style.height = Math.max(10,bodyBoxH-2*pad)+"px";
 
     if(editable){
@@ -1445,7 +1464,7 @@ function buildSlideDOM(s, idx, editable, W){
       bResizeHandle.className = "text-resize-handle";
       bResizeHandle.title = "Drag to resize support text box";
       frameBody.appendChild(bResizeHandle);
-      attachBodyResize(bResizeHandle, frameBody, div, s, boxes.text.w, boxes.text.h, pad);
+      attachBodyResize(bResizeHandle, frameBody, div, s, boxes.body.w, boxes.body.h, pad);
     }
 
     const p = document.createElement("div");
@@ -2003,20 +2022,20 @@ async function renderSlideCanvas(s, idx){
   }
 
   if(detached && s.body && s.body.trim()!==""){
-    const bAlign = s.bodyAlign || s.align;
-    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.text.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.text.h;
+    const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
+    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
     const bAvailW = bodyBoxW - 2*pad;
     ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
     const dBodyLines = wrapLines(ctx, s.body, bAvailW);
     const dBodyBlockH = dBodyLines.length*ts.bodyLH;
-    const bTextTop = boxes.text.y + pad, bTextBottom = boxes.text.y + bodyBoxH - pad;
+    const bTextTop = boxes.body.y + pad, bTextBottom = boxes.body.y + bodyBoxH - pad;
     let bStartY;
     if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
     else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
     else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
     const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
     bStartY += bToY;
-    const bx = (bAlign==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + bToX;
+    const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
     ctx.textAlign = bAlign==="center" ? "center" : "left";
     ctx.fillStyle = s.textColor;
     dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx, bStartY + i*ts.bodyLH); });
@@ -2232,20 +2251,20 @@ function buildSlideSVG(s, idx){
   }
 
   if(detached && s.body && s.body.trim()!==""){
-    const bAlign = s.bodyAlign || s.align;
-    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.text.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.text.h;
+    const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
+    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
     const bAvailW = bodyBoxW - 2*pad;
     mctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
     const dBodyLines = wrapLines(mctx, s.body, bAvailW);
     const dBodyBlockH = dBodyLines.length*ts.bodyLH;
-    const bTextTop = boxes.text.y + pad, bTextBottom = boxes.text.y + bodyBoxH - pad;
+    const bTextTop = boxes.body.y + pad, bTextBottom = boxes.body.y + bodyBoxH - pad;
     let bStartY;
     if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
     else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
     else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
     const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
     bStartY += bToY;
-    const bx = (bAlign==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + bToX;
+    const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
     const bAnchor = bAlign==="center" ? "middle" : "start";
     body += `<text x="${bx}" y="${bStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${bAnchor}">`;
     dBodyLines.forEach((line,i)=>{ body += `<tspan x="${bx}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
