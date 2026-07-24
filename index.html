@@ -142,6 +142,16 @@
   .layout-opt.active{border-color:var(--accent-ui); background:var(--accent-ui-soft);}
   .layout-opt.active span{color:var(--accent-ui);}
   .layout-opt.full-span{grid-column:1/3;}
+  .template-grid{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .template-opt{
+    border:1.5px solid var(--line); border-radius:8px; padding:6px; cursor:pointer; background:var(--surface);
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+  }
+  .template-opt .swatch-row{display:flex; width:100%; height:28px; border-radius:5px; overflow:hidden; border:1px solid var(--line);}
+  .template-opt .swatch-row i{flex:1; font-style:normal;}
+  .template-opt .tpl-name{font-size:10.5px; color:var(--muted); font-weight:600; text-align:center;}
+  .template-opt.active{border-color:var(--accent-ui); background:var(--accent-ui-soft);}
+  .template-opt.active .tpl-name{color:var(--accent-ui);}
   .overlay-grid{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;}
   .overlay-opt{
     border:1.5px solid var(--line); border-radius:8px; padding:6px 2px; cursor:pointer; background:var(--surface);
@@ -229,13 +239,13 @@
   }
   .add-slide-btn:hover{border-color:var(--accent-ui); color:var(--accent-ui);}
   *:focus-visible{ outline:2px solid var(--accent-ui); outline-offset:2px; border-radius:4px; }
-  .btn, .segmented button, .layout-opt, .overlay-opt, select, input[type=color], .stepper button, .thumb-frame, .add-slide-btn, .slider-tg, .switch input + .slider-tg:before {
+  .btn, .segmented button, .layout-opt, .overlay-opt, .template-opt, select, input[type=color], .stepper button, .thumb-frame, .add-slide-btn, .slider-tg, .switch input + .slider-tg:before {
     transition: transform .12s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
   }
   .btn:active, .stepper button:active{ transform: scale(.94); }
-  .layout-opt:active, .overlay-opt:active{ transform: scale(.96); }
-  .layout-opt:hover, .overlay-opt:hover{ border-color:var(--line-strong); }
-  .layout-opt, .overlay-opt{ cursor:pointer; }
+  .layout-opt:active, .overlay-opt:active, .template-opt:active{ transform: scale(.96); }
+  .layout-opt:hover, .overlay-opt:hover, .template-opt:hover{ border-color:var(--line-strong); }
+  .layout-opt, .overlay-opt, .template-opt{ cursor:pointer; }
   .thumb-wrap .thumb-frame{ transition: transform .15s ease, border-color .15s ease; }
   .thumb-wrap:hover .thumb-frame{ transform: translateY(-2px); }
   .thumb-wrap.active .thumb-frame{ transform: translateY(-2px); }
@@ -388,6 +398,39 @@ function fontsInCategory(cat){ return cat==="all" ? FONTS : FONTS.filter(f=>f.ca
 function fontFamilyCSS(name){ const f = findFont(name); return `"${f.name}",${FALLBACK_BY_CATEGORY[f.category]||"sans-serif"}`; }
 function nearestWeight(font, weight){ return font.weights.reduce((best,w)=> Math.abs(w-weight)<Math.abs(best-weight) ? w : best, font.weights[0]); }
 
+// Each template pairs a heading+body font with a small palette of {bg,text} pairs.
+// Applying one sets the deck-wide fonts and cycles the palette across every existing
+// slide (palette[i % palette.length]) — same rotation pattern the built-in default
+// deck already uses, just user-selectable instead of hardcoded.
+const TEMPLATES = [
+  { id:"editorial", label:"Editorial", headFont:"Playfair Display", headWeight:800, bodyFont:"Inter", bodyWeight:400,
+    palette:[ {bg:"#EFE9E1",text:"#14161A"}, {bg:"#DDE7E3",text:"#14161A"}, {bg:"#E7DEDD",text:"#14161A"}, {bg:"#DEE1E9",text:"#14161A"}, {bg:"#14161A",text:"#FAFAF9"} ] },
+  { id:"boldpop", label:"Bold Pop", headFont:"Archivo Black", headWeight:400, bodyFont:"Manrope", bodyWeight:600,
+    palette:[ {bg:"#FFD23F",text:"#141414"}, {bg:"#FF6B57",text:"#FFFFFF"}, {bg:"#00B4A6",text:"#FFFFFF"}, {bg:"#1F2A44",text:"#FFD23F"} ] },
+  { id:"minimono", label:"Minimal Mono", headFont:"Space Grotesk", headWeight:700, bodyFont:"Inter", bodyWeight:400,
+    palette:[ {bg:"#FAFAF9",text:"#111111"}, {bg:"#EDEDED",text:"#111111"}, {bg:"#D8D8D8",text:"#111111"}, {bg:"#111111",text:"#FAFAF9"} ] },
+  { id:"softpastel", label:"Soft Pastel", headFont:"Fraunces", headWeight:600, bodyFont:"DM Sans", bodyWeight:400,
+    palette:[ {bg:"#FBE4E4",text:"#3A2E2E"}, {bg:"#DFF0E6",text:"#213B2E"}, {bg:"#FDF3D8",text:"#4A3B12"}, {bg:"#E8E2F5",text:"#33284D"} ] },
+  { id:"handwritten", label:"Handwritten", headFont:"Caveat", headWeight:700, bodyFont:"Nunito Sans", bodyWeight:400,
+    palette:[ {bg:"#F3E6D8",text:"#4A2E1D"}, {bg:"#E7C9A9",text:"#3B2314"}, {bg:"#C97B5A",text:"#FFF8F0"}, {bg:"#5C4633",text:"#F3E6D8"} ] },
+  { id:"darkcontrast", label:"High Contrast", headFont:"Unbounded", headWeight:800, bodyFont:"Work Sans", bodyWeight:400,
+    palette:[ {bg:"#0B0B0C",text:"#FFFFFF"}, {bg:"#1A1A1D",text:"#F5F5F5"}, {bg:"#F5F5F5",text:"#0B0B0C"} ] },
+];
+function findTemplate(id){ return TEMPLATES.find(t=>t.id===id); }
+function applyTemplate(id){
+  const tpl = findTemplate(id);
+  if(!tpl) return;
+  state.headFont = tpl.headFont; state.headCategory = findFont(tpl.headFont).category; state.headWeight = tpl.headWeight;
+  state.bodyFont = tpl.bodyFont; state.bodyCategory = findFont(tpl.bodyFont).category; state.bodyWeight = tpl.bodyWeight;
+  state.activeTemplate = id;
+  state.slides.forEach((sl,i)=>{
+    const c = tpl.palette[i % tpl.palette.length];
+    sl.bgColor = c.bg; sl.textColor = c.text;
+    sl.kickerColor = null; sl.signatureColor = null;
+  });
+  renderAll();
+}
+
 const ASPECTS = {
   portrait: { label:"Portrait 4:5", w:1080, h:1350 },
   square:   { label:"Square 1:1",   w:1080, h:1080 },
@@ -461,6 +504,7 @@ const state = {
   accent: "#FFAD2A", badgeTextColor: "#1A1A1A", size: "M",
   showPageNum: true, badgePos: "bottom",
   showSwipeHint: false, swipeHintText: "SWIPE FOR MORE", swipeHintColor: null, swipeHintHideLast: true,
+  activeTemplate: null,
   slides: defaultSlides(), active: 0,
 };
 
@@ -753,7 +797,7 @@ function layoutIcon(kind){
 
 // Which collapsible sections start open. Persists for the session (not per-slide).
 const sidebarOpenState = {
-  deck:true, badge:false,
+  deck:true, templates:true, badge:false,
   layout:true, content:true, image:true, layer2:false, logo:false, overlay:false, signature:false, colors:false,
 };
 function sec(id, title, innerHtml){
@@ -796,6 +840,16 @@ function renderSidebar(){
         <label>Text size</label>
         ${segmented("segSize", ["S","M","L"].map(k=>({k, label:k, active:state.size===k})))}
       </div>
+    </div>
+    `)}
+    ${sec("templates", "Templates", `
+    <div class="empty-hint" style="margin-top:-2px;margin-bottom:8px;">One-click font + color combo for the whole deck. Replaces every slide's colors.</div>
+    <div class="template-grid">
+      ${TEMPLATES.map(t=>`
+        <div class="template-opt ${state.activeTemplate===t.id?"active":""}" data-template="${t.id}" role="button" tabindex="0" aria-pressed="${state.activeTemplate===t.id}" aria-label="${t.label} template">
+          <div class="swatch-row">${t.palette.slice(0,4).map(c=>`<i style="background:${c.bg}"></i>`).join("")}</div>
+          <span class="tpl-name">${t.label}</span>
+        </div>`).join("")}
     </div>
     `)}
     ${sec("badge", "Page numbers & badge", `
@@ -1127,6 +1181,12 @@ function renderSidebar(){
       }
       renderAll();
     };
+    opt.onclick = activate;
+    opt.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); activate(); } };
+  });
+
+  document.querySelectorAll(".template-opt").forEach(opt=>{
+    const activate = ()=>applyTemplate(opt.dataset.template);
     opt.onclick = activate;
     opt.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); activate(); } };
   });
