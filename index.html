@@ -314,6 +314,14 @@
   }
   .coffee-btn:hover{ transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.4); }
   .coffee-btn:active{ transform:scale(.96); }
+  .resume-banner{
+    position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:50;
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:10px 14px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    box-shadow:0 6px 20px rgba(0,0,0,.35); font-family:"Inter",sans-serif; font-size:13px; color:var(--ink);
+    max-width:min(92vw, 480px);
+  }
+  .resume-banner .resume-actions{display:flex; gap:8px; flex-shrink:0;}
 </style>
 </head>
 <body>
@@ -324,6 +332,15 @@
   <div class="topbar-actions">
     <button class="btn small" id="undoBtn" onclick="undo()" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" disabled>&#8630;</button>
     <button class="btn small" id="redoBtn" onclick="redo()" title="Redo (Ctrl/Cmd+Shift+Z)" aria-label="Redo" disabled>&#8631;</button>
+    <div class="dropdown" id="projectDropdown">
+      <button class="btn" onclick="toggleDropdown('projectDropdown')">&#128190; <span class="btn-full">Project</span><span class="btn-short">Proj</span> &#9662;</button>
+      <div class="dropdown-menu">
+        <div class="hint">Save your work as a file, or pick up an old one</div>
+        <button onclick="saveProjectToFile()">Save project (.json)</button>
+        <button onclick="document.getElementById('loadProjectInput').click()">Load project&hellip;</button>
+      </div>
+    </div>
+    <input type="file" accept="application/json,.json" id="loadProjectInput" style="display:none">
     <div class="dropdown" id="pngDropdown">
       <button class="btn primary" onclick="toggleDropdown('pngDropdown')">&#11015;&#65039; <span class="btn-full">Download PNG</span><span class="btn-short">PNG</span> &#9662;</button>
       <div class="dropdown-menu">
@@ -525,6 +542,19 @@ let isRestoringHistory = false;
 function snapshotState(){
   return JSON.parse(JSON.stringify(state, (k,v)=> (k==="imageEl"||k==="layer2ImageEl"||k==="logoImageEl") ? undefined : v));
 }
+// Autosave: piggybacks on the exact same serialization undo/redo already uses.
+// Debounced so rapid edits don't hammer localStorage; a convenience net against
+// an accidental tab close, not a substitute for the explicit Save/Load below.
+const AUTOSAVE_KEY = "carousel-studio-autosave-v1";
+let autosaveDebounceTimer = null;
+function scheduleAutosave(){
+  clearTimeout(autosaveDebounceTimer);
+  autosaveDebounceTimer = setTimeout(()=>{
+    try{
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({app:"carousel-studio", fileVersion:1, savedAt:new Date().toISOString(), state:snapshotState()}));
+    }catch(e){ /* storage full or blocked (private mode, etc.) — silently skip, this is a convenience feature */ }
+  }, 600);
+}
 function pushHistory(){
   if(isRestoringHistory) return;
   const snap = snapshotState();
@@ -636,6 +666,28 @@ function saveBlob(blob, filename){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
   showToast("Downloaded " + filename);
+}
+function saveProjectToFile(){
+  const payload = { app:"carousel-studio", fileVersion:1, savedAt:new Date().toISOString(), state:snapshotState() };
+  const blob = new Blob([JSON.stringify(payload)], {type:"application/json"});
+  const stamp = new Date().toISOString().slice(0,10);
+  saveBlob(blob, `carousel-project-${stamp}.json`);
+}
+async function loadProjectFromFile(file){
+  if(!file) return;
+  let payload;
+  try{
+    payload = JSON.parse(await file.text());
+  }catch(e){ showToast("That file isn't valid JSON"); return; }
+  const snap = (payload && payload.app==="carousel-studio" && payload.state) ? payload.state : payload;
+  if(!snap || !Array.isArray(snap.slides) || snap.slides.length===0){
+    showToast("That doesn't look like a Carousel Studio project file");
+    return;
+  }
+  historyStack = []; redoStack = [];
+  await restoreSnapshot(snap);
+  pushHistory();
+  showToast(`Project loaded (${snap.slides.length} slide${snap.slides.length===1?"":"s"})`);
 }
 let toastTimer = null;
 function showToast(msg){
@@ -1941,6 +1993,7 @@ function renderAll(){
   renderStage();
   renderRail();
   pushHistory();
+  scheduleAutosave();
 }
 window.addEventListener("resize", ()=>{ renderStage(); });
 
@@ -2424,6 +2477,12 @@ document.getElementById("sidebarBackdrop").onclick = closeSidebarMobile;
 document.getElementById("sidebarCloseBtn").onclick = closeSidebarMobile;
 window.addEventListener("orientationchange", ()=>setTimeout(renderStage, 200));
 
+document.getElementById("loadProjectInput").onchange = e=>{
+  const file = e.target.files[0];
+  loadProjectFromFile(file);
+  e.target.value = "";
+};
+
 // Paste image from clipboard (Ctrl/Cmd+V) anywhere in the app -> goes to the active slide
 document.addEventListener("paste", (e)=>{
   const items = e.clipboardData && e.clipboardData.items;
@@ -2449,7 +2508,44 @@ stageEl.addEventListener("drop", (e)=>{
   if(file) applyImageFileToActiveSlide(file);
 });
 
+// On load, offer to resume an autosaved session (non-blocking: the default/last-edited
+// deck renders immediately regardless; this banner just offers to swap it in on request).
+function tryOfferAutosaveResume(){
+  let raw;
+  try{ raw = localStorage.getItem(AUTOSAVE_KEY); }catch(e){ return; }
+  if(!raw) return;
+  let payload;
+  try{ payload = JSON.parse(raw); }catch(e){ return; }
+  const snap = payload && payload.state;
+  if(!snap || !Array.isArray(snap.slides) || snap.slides.length===0) return;
+  showResumeBanner(snap);
+}
+function showResumeBanner(snap){
+  const n = snap.slides.length;
+  const bar = document.createElement("div");
+  bar.className = "resume-banner";
+  bar.innerHTML = `
+    <span>Found a saved carousel from your last visit (${n} slide${n===1?"":"s"}).</span>
+    <div class="resume-actions">
+      <button class="btn small" id="resumeDiscardBtn">Start fresh</button>
+      <button class="btn small primary" id="resumeLoadBtn">Resume</button>
+    </div>`;
+  document.body.appendChild(bar);
+  document.getElementById("resumeLoadBtn").onclick = async ()=>{
+    historyStack = []; redoStack = [];
+    await restoreSnapshot(snap);
+    pushHistory();
+    bar.remove();
+    showToast("Resumed your last session");
+  };
+  document.getElementById("resumeDiscardBtn").onclick = ()=>{
+    try{ localStorage.removeItem(AUTOSAVE_KEY); }catch(e){}
+    bar.remove();
+  };
+}
+
 renderAll();
+tryOfferAutosaveResume();
 </script>
 </body>
 </html>
