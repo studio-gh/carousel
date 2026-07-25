@@ -1979,6 +1979,16 @@ function buildSlideDOM(s, idx, editable, W){
 
   if(editable){
     requestAnimationFrame(()=>{ fitText(div, frameText, s); if(frameBody) fitDetachedBody(div, frameBody, s); });
+    const headFontStr = `${fp.headWeight} 16px "${fp.headName}"`;
+    const bodyFontStr = `${fp.bodyWeight} 16px "${fp.bodyName}"`;
+    if(!document.fonts.check(headFontStr) || !document.fonts.check(bodyFontStr)){
+      Promise.all([document.fonts.load(headFontStr), document.fonts.load(bodyFontStr)]).then(()=>{
+        // Only correct if we're still looking at this same slide \u2014 avoids a stale
+        // re-render clobbering whatever the user has since switched to, and naturally
+        // stops the loop once fonts are cached (document.fonts.check will be true next time).
+        if(state.slides[state.active] === s) renderStage();
+      });
+    }
   }
   return div;
 }
