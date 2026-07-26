@@ -347,6 +347,25 @@
   }
   .palette-swatch:hover{ border-color:var(--line-strong); transform:scale(1.08); }
   .palette-swatch:active{ transform:scale(.96); }
+  .story-modal{
+    display:none; position:fixed; inset:0; z-index:300; background:#000;
+    align-items:center; justify-content:center;
+  }
+  .story-modal.open{ display:flex; }
+  .story-progress{
+    position:absolute; top:14px; left:14px; right:14px; z-index:2;
+    display:flex; gap:5px;
+  }
+  .story-progress .seg{ flex:1; height:3px; border-radius:2px; background:rgba(255,255,255,.35); overflow:hidden; }
+  .story-progress .seg i{ display:block; height:100%; width:0%; background:#fff; }
+  .story-close{
+    position:absolute; top:8px; right:12px; z-index:3; background:none; border:none;
+    color:#fff; font-size:30px; line-height:1; cursor:pointer; padding:6px 10px;
+  }
+  .story-stage{ max-height:92vh; max-width:92vw; box-shadow:0 20px 60px rgba(0,0,0,.6); border-radius:10px; overflow:hidden; }
+  .story-tap-left, .story-tap-right{ position:absolute; top:0; bottom:0; z-index:1; cursor:pointer; }
+  .story-tap-left{ left:0; width:30%; }
+  .story-tap-right{ right:0; width:70%; }
 </style>
 </head>
 <body>
@@ -357,6 +376,7 @@
   <div class="topbar-actions">
     <button class="btn small" id="undoBtn" onclick="undo()" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" disabled>&#8630;</button>
     <button class="btn small" id="redoBtn" onclick="redo()" title="Redo (Ctrl/Cmd+Shift+Z)" aria-label="Redo" disabled>&#8631;</button>
+    <button class="btn small" id="storyPreviewBtn" title="Preview as a Story (auto-advancing)" aria-label="Story preview">&#9654; <span class="btn-full">Preview</span></button>
     <div class="dropdown" id="projectDropdown">
       <button class="btn" onclick="toggleDropdown('projectDropdown')">&#128190; <span class="btn-full">Project</span><span class="btn-short">Proj</span> &#9662;</button>
       <div class="dropdown-menu">
@@ -415,6 +435,14 @@
       <button class="btn small" id="aiPromptCancel">Fechar</button>
       <button class="btn small primary" id="aiPromptCopy">Copiar prompt</button>
     </div>
+  </div>
+  <div class="modal-backdrop" id="storyBackdrop"></div>
+  <div class="story-modal" id="storyModal" role="dialog" aria-modal="true" aria-label="Story preview">
+    <div class="story-progress" id="storyProgress"></div>
+    <button class="story-close" id="storyCloseBtn" aria-label="Close preview">&times;</button>
+    <div class="story-stage" id="storyStage"></div>
+    <div class="story-tap-left" id="storyTapLeft" aria-label="Previous slide"></div>
+    <div class="story-tap-right" id="storyTapRight" aria-label="Next slide"></div>
   </div>
   <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close editing panel">&#10005;</button>
   <div class="sidebar" id="sidebar"></div>
@@ -600,12 +628,25 @@ function snapshotState(){
 // an accidental tab close, not a substitute for the explicit Save/Load below.
 const AUTOSAVE_KEY = "carousel-studio-autosave-v1";
 let autosaveDebounceTimer = null;
+let autosaveQuotaWarned = false;
 function scheduleAutosave(){
   clearTimeout(autosaveDebounceTimer);
   autosaveDebounceTimer = setTimeout(()=>{
     try{
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({app:"carousel-studio", fileVersion:1, savedAt:new Date().toISOString(), state:snapshotState()}));
-    }catch(e){ /* storage full or blocked (private mode, etc.) — silently skip, this is a convenience feature */ }
+      autosaveQuotaWarned = false; // a successful save re-arms the warning for next time
+    }catch(e){
+      // Storage full/blocked (private mode, or \u2014 most likely for this app \u2014 a deck with
+      // several large photos pushing the JSON past the browser's ~5-10MB localStorage quota).
+      // Autosave is a convenience net, not the primary save path, so fail quietly by default;
+      // but a QuotaExceededError specifically means "this deck is too big for autosave" which
+      // is worth a one-time nudge toward the explicit Save project (.json) flow, which has no
+      // such size limit.
+      if(!autosaveQuotaWarned && e && (e.name==="QuotaExceededError" || e.code===22)){
+        autosaveQuotaWarned = true;
+        showToast("This project is too large for autosave \u2014 use Project \u2192 Save project (.json) to keep your work");
+      }
+    }
   }, 600);
 }
 function pushHistory(){
@@ -804,6 +845,109 @@ function applyImportedScript(rawText){
   renderAll();
   showToast(`Imported ${newSlides.length} slide${newSlides.length===1?"":"s"}`);
 }
+/* ====================== STORY MODE (auto-advancing preview) ======================
+   Plays the deck like an Instagram Story: one segmented progress bar per slide across
+   the top, each filling over `storyDuration`ms before auto-advancing. Tap the left ~30%
+   to go back, the right ~70% to go forward (same split real Stories use), press-and-hold
+   anywhere to pause. This is preview-only \u2014 it doesn't change anything about the deck
+   or what gets exported, it just plays the existing slides back using the same
+   (non-editable) DOM render path already used for thumbnails. */
+const storyDuration = 4500;
+let storyIdx = 0, storyTimer = null, storyPaused = false, storyHoldTimer = null, storyIsHolding = false;
+function openStoryMode(){
+  if(!state.slides.length) return;
+  document.getElementById("storyBackdrop").classList.add("open");
+  document.getElementById("storyModal").classList.add("open");
+  renderStoryProgress();
+  renderStorySlide(0);
+}
+function closeStoryMode(){
+  clearTimeout(storyTimer);
+  clearTimeout(storyHoldTimer);
+  document.getElementById("storyBackdrop").classList.remove("open");
+  document.getElementById("storyModal").classList.remove("open");
+  document.getElementById("storyStage").innerHTML = "";
+}
+function renderStoryProgress(){
+  const wrap = document.getElementById("storyProgress");
+  wrap.innerHTML = state.slides.map(()=>`<div class="seg"><i></i></div>`).join("");
+}
+function renderStorySlide(i){
+  clearTimeout(storyTimer);
+  storyIdx = i;
+  storyPaused = false;
+  const stage = document.getElementById("storyStage");
+  stage.innerHTML = "";
+  const asp = ASPECTS[state.aspect];
+  const maxH = window.innerHeight*0.92, maxW = window.innerWidth*0.92;
+  const W = Math.max(120, Math.min(maxW, maxH*asp.w/asp.h));
+  stage.appendChild(buildSlideDOM(state.slides[i], i, false, W));
+
+  const segs = document.querySelectorAll("#storyProgress .seg");
+  segs.forEach((seg,idx)=>{
+    const bar = seg.querySelector("i");
+    bar.style.transition = "none";
+    if(idx < i) bar.style.width = "100%";
+    else if(idx > i) bar.style.width = "0%";
+    else{
+      bar.style.width = "0%";
+      void bar.offsetWidth; // force reflow so the transition below actually animates from 0
+      bar.style.transition = `width ${storyDuration}ms linear`;
+      requestAnimationFrame(()=>{ bar.style.width = "100%"; });
+    }
+  });
+  scheduleStoryAdvance(storyDuration);
+}
+function storyAdvance(){
+  if(storyIdx < state.slides.length-1) renderStorySlide(storyIdx+1);
+  else closeStoryMode();
+}
+function scheduleStoryAdvance(ms){
+  clearTimeout(storyTimer);
+  storyTimer = setTimeout(storyAdvance, ms);
+}
+function storyPause(){
+  if(storyPaused) return;
+  storyPaused = true;
+  clearTimeout(storyTimer);
+  const seg = document.querySelectorAll("#storyProgress .seg")[storyIdx];
+  if(!seg) return;
+  const bar = seg.querySelector("i");
+  const ratio = bar.getBoundingClientRect().width / seg.getBoundingClientRect().width;
+  bar.dataset.pausedRatio = String(ratio);
+  bar.style.transition = "none";
+  bar.style.width = (ratio*100)+"%";
+}
+function storyResume(){
+  if(!storyPaused) return;
+  storyPaused = false;
+  const seg = document.querySelectorAll("#storyProgress .seg")[storyIdx];
+  if(!seg) return;
+  const bar = seg.querySelector("i");
+  const ratio = parseFloat(bar.dataset.pausedRatio||"0");
+  const remaining = Math.max(200, storyDuration*(1-ratio));
+  bar.style.transition = `width ${remaining}ms linear`;
+  requestAnimationFrame(()=>{ bar.style.width = "100%"; });
+  scheduleStoryAdvance(remaining);
+}
+function wireStoryTapZone(el, dir){
+  el.addEventListener("pointerdown", ()=>{
+    storyIsHolding = false;
+    storyHoldTimer = setTimeout(()=>{ storyIsHolding = true; storyPause(); }, 180);
+  });
+  const release = ()=>{
+    clearTimeout(storyHoldTimer);
+    if(storyIsHolding){ storyResume(); storyIsHolding = false; return; }
+    if(dir==="prev") renderStorySlide(Math.max(0, storyIdx-1));
+    else storyAdvance();
+  };
+  el.addEventListener("pointerup", release);
+  el.addEventListener("pointerleave", ()=>{
+    clearTimeout(storyHoldTimer);
+    if(storyIsHolding){ storyResume(); storyIsHolding = false; }
+  });
+}
+
 function openImportModal(){
   document.getElementById("projectDropdown").classList.remove("open");
   document.getElementById("importModalBackdrop").classList.add("open");
@@ -974,6 +1118,42 @@ function wrapLines(ctx, text, maxWidth){
     lines.push(line);
   });
   return lines;
+}
+/* Canvas/SVG safety net: re-measures with the ACTUAL text-measurement engine being used
+   (ctx.measureText, which can wrap very slightly differently than the DOM/CSS layout that
+   fitText() used to compute s.tscale) and shrinks further, locally, if the wrapped result
+   still doesn't fit. This never touches s.tscale (that stays the DOM's own number) — it's
+   a last-resort backstop so an exported image can never show overflowing/clipped text,
+   even in an edge case the DOM-side shrink didn't quite anticipate. */
+function fitCombinedToHeight(ctx, headingText, bodyText, fp, ts0, availW, availH, hasKicker, kickerLH, kickerGap){
+  let scale = 1, headLines, bodyLines, headPx, bodyPx, headLH, bodyLH, gap, totalH;
+  for(let tries=0; tries<40; tries++){
+    headPx = ts0.headPx*scale; bodyPx = ts0.bodyPx*scale;
+    headLH = ts0.headLH*scale; bodyLH = ts0.bodyLH*scale; gap = ts0.gap*scale;
+    ctx.font = `${fp.headWeight} ${headPx}px "${fp.headName}"`;
+    headLines = wrapLines(ctx, headingText||"", availW);
+    bodyLines = [];
+    if(bodyText){
+      ctx.font = `${fp.bodyWeight} ${bodyPx}px "${fp.bodyName}"`;
+      bodyLines = wrapLines(ctx, bodyText, availW);
+    }
+    const headBlockH = headLines.length*headLH, bodyBlockH = bodyLines.length*bodyLH;
+    totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (bodyLines.length? gap+bodyBlockH : 0);
+    if(totalH <= availH || scale<=0.3) break;
+    scale -= 0.03;
+  }
+  return {headLines, bodyLines, headPx, bodyPx, headLH, bodyLH, gap, totalH};
+}
+function fitSingleToHeight(ctx, text, weight, family, basePx, lhMult, availW, availH){
+  let scale = 1, lines, px, lh;
+  for(let tries=0; tries<40; tries++){
+    px = basePx*scale; lh = px*lhMult;
+    ctx.font = `${weight} ${px}px "${family}"`;
+    lines = wrapLines(ctx, text||"", availW);
+    if(lines.length*lh <= availH || scale<=0.3) break;
+    scale -= 0.03;
+  }
+  return {lines, px, lh};
 }
 function loadImageEl(dataURL){
   return new Promise(res=>{ const img = new Image(); img.onload = ()=>res(img); img.src = dataURL; });
@@ -1470,12 +1650,14 @@ function renderSidebar(){
     state.headCategory=e.target.value;
     const opts = fontsInCategory(state.headCategory);
     if(!opts.find(f=>f.name===state.headFont)){ state.headFont=opts[0].name; state.headWeight=opts[0].weights[opts[0].weights.length-1]; }
+    state.activeTemplate = null;
     renderAll();
   };
   document.getElementById("selHeadFont").onchange = e=>{
     state.headFont=e.target.value;
     const f=findFont(state.headFont);
     state.headWeight=nearestWeight(f, state.headWeight);
+    state.activeTemplate = null;
     renderAll();
   };
   const headWeightRange = document.getElementById("headWeightRange");
@@ -1483,6 +1665,7 @@ function renderSidebar(){
     const f=findFont(state.headFont);
     state.headWeight=f.weights[+e.target.value];
     document.getElementById("headWeightLabel").textContent=state.headWeight;
+    state.activeTemplate = null;
     renderStage();
   };
   headWeightRange.onchange = ()=>commitThumb(state.active);
@@ -1490,18 +1673,21 @@ function renderSidebar(){
     state.bodyCategory=e.target.value;
     const opts = fontsInCategory(state.bodyCategory);
     if(!opts.find(f=>f.name===state.bodyFont)){ state.bodyFont=opts[0].name; state.bodyWeight=opts[0].weights[0]; }
+    state.activeTemplate = null;
     renderAll();
   };
   document.getElementById("selBodyFont").onchange = e=>{
     state.bodyFont=e.target.value;
     const f=findFont(state.bodyFont);
     state.bodyWeight=nearestWeight(f, state.bodyWeight);
+    state.activeTemplate = null;
     renderAll();
   };
   const bodyWeightRange = document.getElementById("bodyWeightRange");
   bodyWeightRange.oninput = e=>{
     const f=findFont(state.bodyFont);
     state.bodyWeight=f.weights[+e.target.value];
+    state.activeTemplate = null;
     document.getElementById("bodyWeightLabel").textContent=state.bodyWeight;
     renderStage();
   };
@@ -1603,8 +1789,8 @@ function renderSidebar(){
   if(sigDividerToggle) sigDividerToggle.onchange = e=>{ s.sigDivider = e.target.checked; renderStage(); commitThumb(state.active); };
   wireColorField("signatureColor", v=>{ s.signatureColor=v; renderStage(); }, ()=>commitThumb(state.active));
 
-  wireColorField("bgColor", v=>{ s.bgColor=v; renderStage(); }, ()=>commitThumb(state.active));
-  wireColorField("textColor", v=>{ s.textColor=v; renderStage(); }, ()=>commitThumb(state.active));
+  wireColorField("bgColor", v=>{ s.bgColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
+  wireColorField("textColor", v=>{ s.textColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
 
   document.getElementById("uploadBtn").onclick = ()=>document.getElementById("fileInput").click();
   document.getElementById("fileInput").onchange = e=>{
@@ -1632,6 +1818,7 @@ function renderSidebar(){
     btn.onclick = ()=>{
       const c = btn.dataset.color;
       s.bgColor = c; s.textColor = contrastTextColor(c);
+      state.activeTemplate = null;
       renderAll();
     };
   });
@@ -2420,19 +2607,18 @@ async function renderSlideCanvas(s, idx){
   const pad = basePad(W);
   const textBoxW = (s.textBoxWRatio||1)*boxes.text.w, textBoxH = (s.textBoxHRatio||1)*boxes.text.h;
   const availW = textBoxW - 2*pad;
-  const ts = textSizes(W, s);
-
-  ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
-  const headLines = wrapLines(ctx, s.heading||"", availW);
+  const availH = textBoxH - 2*pad;
+  const ts0 = textSizes(W, s);
   const detached = !!s.bodyDetached;
   const hasBody = !detached && s.body && s.body.trim()!=="";
-  ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
-  const bodyLines = hasBody ? wrapLines(ctx, s.body, availW) : [];
+  const hasKicker = s.kicker && s.kicker.trim()!=="";
+  const kickerPx = W*0.026, kickerLH = kickerPx*1.3, kickerGap = ts0.gap*0.6;
+  const fit = fitCombinedToHeight(ctx, s.heading||"", hasBody?s.body:"", fp, ts0, availW, availH, hasKicker, kickerLH, kickerGap);
+  const { headLines, bodyLines, headPx, bodyPx, headLH, bodyLH, gap } = fit;
+  const ts = { headPx, bodyPx, headLH, bodyLH, gap };
 
   const headBlockH = headLines.length*ts.headLH;
   const bodyBlockH = bodyLines.length*ts.bodyLH;
-  const hasKicker = s.kicker && s.kicker.trim()!=="";
-  const kickerPx = W*0.026, kickerLH = kickerPx*1.3, kickerGap = ts.gap*0.6;
   const totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
 
   let startY;
@@ -2469,10 +2655,10 @@ async function renderSlideCanvas(s, idx){
   if(detached && s.body && s.body.trim()!==""){
     const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
-    const bAvailW = bodyBoxW - 2*pad;
-    ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
-    const dBodyLines = wrapLines(ctx, s.body, bAvailW);
-    const dBodyBlockH = dBodyLines.length*ts.bodyLH;
+    const bAvailW = bodyBoxW - 2*pad, bAvailH = bodyBoxH - 2*pad;
+    const dFit = fitSingleToHeight(ctx, s.body, fp.bodyWeight, fp.bodyName, ts0.bodyPx, ts0.bodyLH/ts0.bodyPx, bAvailW, bAvailH);
+    const dBodyLines = dFit.lines, dBodyLH = dFit.lh;
+    const dBodyBlockH = dBodyLines.length*dBodyLH;
     const bTextTop = boxes.body.y + pad, bTextBottom = boxes.body.y + bodyBoxH - pad;
     let bStartY;
     if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
@@ -2483,7 +2669,8 @@ async function renderSlideCanvas(s, idx){
     const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
     ctx.textAlign = bAlign==="center" ? "center" : "left";
     ctx.fillStyle = s.textColor;
-    dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx, bStartY + i*ts.bodyLH); });
+    ctx.font = `${fp.bodyWeight} ${dFit.px}px "${fp.bodyName}"`;
+    dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx, bStartY + i*dBodyLH); });
   }
 
   if(state.showPageNum){
@@ -2650,21 +2837,21 @@ function buildSlideSVG(s, idx){
   const pad = basePad(W);
   const textBoxW = (s.textBoxWRatio||1)*boxes.text.w, textBoxH = (s.textBoxHRatio||1)*boxes.text.h;
   const availW = textBoxW - 2*pad;
-  const ts = textSizes(W, s);
+  const availH = textBoxH - 2*pad;
+  const ts0 = textSizes(W, s);
 
   const measCanvas = document.createElement("canvas");
   const mctx = measCanvas.getContext("2d");
-  mctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
-  const headLines = wrapLines(mctx, s.heading||"", availW);
   const detached = !!s.bodyDetached;
   const hasBody = !detached && s.body && s.body.trim()!=="";
-  mctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
-  const bodyLines = hasBody ? wrapLines(mctx, s.body, availW) : [];
+  const hasKicker = s.kicker && s.kicker.trim()!=="";
+  const kickerPx = W*0.026, kickerLH = kickerPx*1.3, kickerGap = ts0.gap*0.6;
+  const fit = fitCombinedToHeight(mctx, s.heading||"", hasBody?s.body:"", fp, ts0, availW, availH, hasKicker, kickerLH, kickerGap);
+  const { headLines, bodyLines, headPx, bodyPx, headLH, bodyLH, gap } = fit;
+  const ts = { headPx, bodyPx, headLH, bodyLH, gap };
 
   const headBlockH = headLines.length*ts.headLH;
   const bodyBlockH = bodyLines.length*ts.bodyLH;
-  const hasKicker = s.kicker && s.kicker.trim()!=="";
-  const kickerPx = W*0.026, kickerLH = kickerPx*1.3, kickerGap = ts.gap*0.6;
   const totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
 
   const textTop = boxes.text.y + pad, textBottom = boxes.text.y + textBoxH - pad;
@@ -2698,10 +2885,10 @@ function buildSlideSVG(s, idx){
   if(detached && s.body && s.body.trim()!==""){
     const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
-    const bAvailW = bodyBoxW - 2*pad;
-    mctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
-    const dBodyLines = wrapLines(mctx, s.body, bAvailW);
-    const dBodyBlockH = dBodyLines.length*ts.bodyLH;
+    const bAvailW = bodyBoxW - 2*pad, bAvailH = bodyBoxH - 2*pad;
+    const dFit = fitSingleToHeight(mctx, s.body, fp.bodyWeight, fp.bodyName, ts0.bodyPx, ts0.bodyLH/ts0.bodyPx, bAvailW, bAvailH);
+    const dBodyLines = dFit.lines, dBodyLH = dFit.lh;
+    const dBodyBlockH = dBodyLines.length*dBodyLH;
     const bTextTop = boxes.body.y + pad, bTextBottom = boxes.body.y + bodyBoxH - pad;
     let bStartY;
     if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
@@ -2711,8 +2898,8 @@ function buildSlideSVG(s, idx){
     bStartY += bToY;
     const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
     const bAnchor = bAlign==="center" ? "middle" : "start";
-    body += `<text x="${bx}" y="${bStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${bAnchor}">`;
-    dBodyLines.forEach((line,i)=>{ body += `<tspan x="${bx}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
+    body += `<text x="${bx}" y="${bStartY + dFit.px*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${dFit.px.toFixed(1)}" fill="${s.textColor}" text-anchor="${bAnchor}">`;
+    dBodyLines.forEach((line,i)=>{ body += `<tspan x="${bx}" ${i===0?"":`dy="${dBodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
     body += `</text>`;
   }
 
@@ -2824,6 +3011,18 @@ document.getElementById("importModalConfirm").onclick = ()=>{
 document.getElementById("aiPromptModalBackdrop").onclick = closeAIPromptModal;
 document.getElementById("aiPromptCancel").onclick = closeAIPromptModal;
 document.getElementById("aiPromptCopy").onclick = copyAIPromptText;
+
+document.getElementById("storyPreviewBtn").onclick = openStoryMode;
+document.getElementById("storyCloseBtn").onclick = closeStoryMode;
+document.getElementById("storyBackdrop").onclick = closeStoryMode;
+wireStoryTapZone(document.getElementById("storyTapLeft"), "prev");
+wireStoryTapZone(document.getElementById("storyTapRight"), "next");
+document.addEventListener("keydown", e=>{
+  if(!document.getElementById("storyModal").classList.contains("open")) return;
+  if(e.key==="Escape") closeStoryMode();
+  else if(e.key==="ArrowRight") storyAdvance();
+  else if(e.key==="ArrowLeft") renderStorySlide(Math.max(0, storyIdx-1));
+});
 
 // Paste image from clipboard (Ctrl/Cmd+V) anywhere in the app -> goes to the active slide
 document.addEventListener("paste", (e)=>{
