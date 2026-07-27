@@ -366,6 +366,8 @@
   .story-tap-left, .story-tap-right{ position:absolute; top:0; bottom:0; z-index:1; cursor:pointer; }
   .story-tap-left{ left:0; width:30%; }
   .story-tap-right{ right:0; width:70%; }
+  .video-progress-bar{ width:100%; height:8px; border-radius:4px; background:var(--panel); overflow:hidden; margin-top:4px; }
+  .video-progress-fill{ height:100%; width:0%; background:var(--accent-ui); transition:width .2s ease; }
 </style>
 </head>
 <body>
@@ -395,6 +397,9 @@
         <button onclick="exportCurrentPNG()">This slide</button>
         <button onclick="exportAllPNGSeparate()">All slides (one by one)</button>
         <button onclick="exportAllPNG()">All slides (.zip)</button>
+        <div class="hint" style="margin-top:8px;">Reels format (9:16, extended background)</div>
+        <button onclick="exportCurrentReels()">This slide as Reels</button>
+        <button onclick="exportAllReels()">All slides as Reels (.zip)</button>
       </div>
     </div>
     <div class="dropdown" id="svgDropdown">
@@ -405,6 +410,20 @@
         <button onclick="exportAllSVG()">All slides (.zip)</button>
       </div>
     </div>
+    <div class="dropdown" id="videoDropdown">
+      <button class="btn" onclick="toggleDropdown('videoDropdown')">&#127909; <span class="btn-full">Export Video</span><span class="btn-short">MP4</span> &#9662;</button>
+      <div class="dropdown-menu">
+        <div class="hint">Animated MP4 (uses each slide's Animation setting)</div>
+        <button onclick="exportVideoMP4(false)">Full carousel</button>
+        <button onclick="exportVideoMP4(true)">Full carousel as Reels (9:16)</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="videoProgressBackdrop"></div>
+  <div class="import-modal" id="videoProgressModal" role="dialog" aria-modal="true" aria-label="Exporting video">
+    <h3>&#127909; Exporting video&hellip;</h3>
+    <p class="import-modal-hint" id="videoProgressText">Preparing&hellip;</p>
+    <div class="video-progress-bar"><div class="video-progress-fill" id="videoProgressFill"></div></div>
   </div>
 </div>
 
@@ -576,6 +595,7 @@ function blankSlideDefaults(){
     bodyPosition:"top", bodyAlign:null,
     imageRadius:0,
     kicker:"", kickerColor:null,
+    textAnim:"none",
     logoImage:null, logoImageEl:null, logoPos:"tl", logoSize:0.16,
     // Layer 2: an optional second image (texture, grain, double exposure) above the base photo
     layer2Image:null, layer2ImageEl:null,
@@ -864,6 +884,7 @@ function openStoryMode(){
 function closeStoryMode(){
   clearTimeout(storyTimer);
   clearTimeout(storyHoldTimer);
+  stopTextAnim();
   document.getElementById("storyBackdrop").classList.remove("open");
   document.getElementById("storyModal").classList.remove("open");
   document.getElementById("storyStage").innerHTML = "";
@@ -872,6 +893,76 @@ function renderStoryProgress(){
   const wrap = document.getElementById("storyProgress");
   wrap.innerHTML = state.slides.map(()=>`<div class="seg"><i></i></div>`).join("");
 }
+const TEXT_ANIMS = {
+  none: {label:"None"},
+  fade: {label:"Fade in"},
+  slideup: {label:"Slide up"},
+  typewriter: {label:"Typewriter"},
+};
+/* Pure functions: given how many ms have elapsed since a slide became visible, return the
+   opacity/offset (and, for typewriter, how many characters to reveal) for the heading and
+   body. Deliberately framework-agnostic \u2014 same math drives the DOM preview (Story Mode,
+   via rAF below) AND canvas video-frame rendering later, so the two can never drift apart
+   the way DOM vs Canvas already can for static layout (see v22 font-race fix). Body never
+   uses typewriter (would make longer support text tedious to read) and starts slightly
+   after the heading so the entrance reads as sequenced, not simultaneous. */
+function computeHeadingAnimState(animType, elapsedMs, headingText){
+  const len = headingText ? headingText.length : 0;
+  if(animType==="none" || !headingText) return {opacity:1, dy:0, revealLen:len};
+  if(animType==="typewriter"){
+    const totalMs = Math.min(len*28, 2200);
+    const t = Math.max(0, Math.min(1, totalMs? elapsedMs/totalMs : 1));
+    return {opacity:1, dy:0, revealLen: Math.round(t*len)};
+  }
+  const ANIM_MS = 550;
+  const t = Math.max(0, Math.min(1, elapsedMs/ANIM_MS));
+  const eased = 1-Math.pow(1-t, 3);
+  if(animType==="slideup") return {opacity:eased, dy:(1-eased)*18, revealLen:len};
+  return {opacity:eased, dy:0, revealLen:len};
+}
+function computeBodyAnimState(animType, elapsedMs){
+  if(animType==="none") return {opacity:1, dy:0};
+  const ANIM_MS = 550, DELAY = 120;
+  const t = Math.max(0, Math.min(1, (elapsedMs-DELAY)/ANIM_MS));
+  const eased = 1-Math.pow(1-t, 3);
+  if(animType==="slideup") return {opacity:eased, dy:(1-eased)*14};
+  return {opacity:eased, dy:0};
+}
+let storyAnimFrame = null, storyAnimStartTs = 0, storyAnimElapsedAtPause = 0, storyAnimTickFn = null;
+function startTextAnim(slideEl, s){
+  stopTextAnim();
+  const anim = s.textAnim||"none";
+  const heading = slideEl.querySelector(".slide-heading");
+  const body = slideEl.querySelector(".slide-body");
+  const fullHeading = s.heading||"";
+  const applyAt = (elapsed)=>{
+    if(heading){
+      const hs = computeHeadingAnimState(anim, elapsed, fullHeading);
+      heading.style.opacity = hs.opacity;
+      heading.style.transform = `translateY(${hs.dy}px)`;
+      if(anim==="typewriter") heading.textContent = fullHeading.slice(0, hs.revealLen);
+    }
+    if(body){
+      const bs = computeBodyAnimState(anim, elapsed);
+      body.style.opacity = bs.opacity;
+      body.style.transform = `translateY(${bs.dy}px)`;
+    }
+  };
+  storyAnimElapsedAtPause = 0;
+  applyAt(0); // set the pre-animation state synchronously so there's no one-frame flash of full text
+  if(anim==="none") return;
+  storyAnimStartTs = performance.now();
+  storyAnimTickFn = (now)=>{
+    applyAt((now-storyAnimStartTs)+storyAnimElapsedAtPause);
+    storyAnimFrame = requestAnimationFrame(storyAnimTickFn);
+  };
+  storyAnimFrame = requestAnimationFrame(storyAnimTickFn);
+}
+function stopTextAnim(){
+  if(storyAnimFrame){ cancelAnimationFrame(storyAnimFrame); storyAnimFrame=null; }
+  storyAnimTickFn = null;
+}
+
 function renderStorySlide(i){
   clearTimeout(storyTimer);
   storyIdx = i;
@@ -881,7 +972,9 @@ function renderStorySlide(i){
   const asp = ASPECTS[state.aspect];
   const maxH = window.innerHeight*0.92, maxW = window.innerWidth*0.92;
   const W = Math.max(120, Math.min(maxW, maxH*asp.w/asp.h));
-  stage.appendChild(buildSlideDOM(state.slides[i], i, false, W));
+  const slideEl = buildSlideDOM(state.slides[i], i, false, W);
+  stage.appendChild(slideEl);
+  startTextAnim(slideEl, state.slides[i]);
 
   const segs = document.querySelectorAll("#storyProgress .seg");
   segs.forEach((seg,idx)=>{
@@ -910,6 +1003,11 @@ function storyPause(){
   if(storyPaused) return;
   storyPaused = true;
   clearTimeout(storyTimer);
+  if(storyAnimFrame){
+    storyAnimElapsedAtPause += performance.now()-storyAnimStartTs;
+    cancelAnimationFrame(storyAnimFrame);
+    storyAnimFrame = null;
+  }
   const seg = document.querySelectorAll("#storyProgress .seg")[storyIdx];
   if(!seg) return;
   const bar = seg.querySelector("i");
@@ -921,6 +1019,10 @@ function storyPause(){
 function storyResume(){
   if(!storyPaused) return;
   storyPaused = false;
+  if(storyAnimTickFn){
+    storyAnimStartTs = performance.now();
+    storyAnimFrame = requestAnimationFrame(storyAnimTickFn);
+  }
   const seg = document.querySelectorAll("#storyProgress .seg")[storyIdx];
   if(!seg) return;
   const bar = seg.querySelector("i");
@@ -1459,6 +1561,11 @@ function renderSidebar(){
       <label>Body text</label>
       <textarea id="bodyInput" rows="3" style="${TA_STYLE}">${escapeXML(s.body||"")}</textarea>
     </div>
+    <div class="field">
+      <label>Animation</label>
+      ${segmented("segTextAnim", Object.keys(TEXT_ANIMS).map(k=>({k, label:TEXT_ANIMS[k].label, active:(s.textAnim||"none")===k})))}
+      <div class="empty-hint" style="margin-top:6px;">Plays in Story Preview and video export \u2014 doesn't affect static PNG/SVG downloads.</div>
+    </div>
     <div class="row2">
       <div class="field">
         <label>Headline size (px)</label>
@@ -1777,6 +1884,9 @@ function renderSidebar(){
   });
   document.querySelectorAll("#segBodyAlign button").forEach(b=>b.onclick=()=>{
     s.bodyAlign = b.dataset.k; renderAll(); commitThumb(state.active);
+  });
+  document.querySelectorAll("#segTextAnim button").forEach(b=>b.onclick=()=>{
+    s.textAnim = b.dataset.k; renderAll(); commitThumb(state.active);
   });
 
   ["sigTL","sigTR","sigBL","sigBR"].forEach(key=>{
@@ -2568,7 +2678,7 @@ function paintOverlayCanvas(ctx, box, dir, opacity, radius){
   if(grad){ ctx.save(); roundRectPath(ctx,x,y,w,h,radius||0); ctx.clip(); ctx.fillStyle = grad; ctx.fillRect(x,y,w,h); ctx.restore(); }
 }
 
-async function renderSlideCanvas(s, idx){
+async function renderSlideCanvas(s, idx, animMs){
   const asp = ASPECTS[state.aspect];
   const fp = {
     headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
@@ -2617,6 +2727,15 @@ async function renderSlideCanvas(s, idx){
   const { headLines, bodyLines, headPx, bodyPx, headLH, bodyLH, gap } = fit;
   const ts = { headPx, bodyPx, headLH, bodyLH, gap };
 
+  const anim = s.textAnim||"none";
+  const headAnimState = animMs!=null ? computeHeadingAnimState(anim, animMs, s.heading||"") : {opacity:1, dy:0, revealLen:(s.heading||"").length};
+  const bodyAnimState = animMs!=null ? computeBodyAnimState(anim, animMs) : {opacity:1, dy:0};
+  let drawHeadLines = headLines;
+  if(animMs!=null && anim==="typewriter"){
+    ctx.font = `${fp.headWeight} ${headPx}px "${fp.headName}"`;
+    drawHeadLines = wrapLines(ctx, (s.heading||"").slice(0, headAnimState.revealLen), availW);
+  }
+
   const headBlockH = headLines.length*ts.headLH;
   const bodyBlockH = bodyLines.length*ts.bodyLH;
   const totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (hasBody? ts.gap+bodyBlockH : 0);
@@ -2644,12 +2763,18 @@ async function renderSlideCanvas(s, idx){
   }
   ctx.fillStyle = s.textColor;
   ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
-  headLines.forEach((line,i)=>{ ctx.fillText(line, x, cursorY + i*ts.headLH); });
+  ctx.save();
+  ctx.globalAlpha = headAnimState.opacity;
+  drawHeadLines.forEach((line,i)=>{ ctx.fillText(line, x, cursorY + headAnimState.dy + i*ts.headLH); });
+  ctx.restore();
 
   if(hasBody){
+    ctx.save();
+    ctx.globalAlpha = bodyAnimState.opacity;
     ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
     const bodyStartY = cursorY + headBlockH + ts.gap;
-    bodyLines.forEach((line,i)=>{ ctx.fillText(line, x, bodyStartY + i*ts.bodyLH); });
+    bodyLines.forEach((line,i)=>{ ctx.fillText(line, x, bodyStartY + bodyAnimState.dy + i*ts.bodyLH); });
+    ctx.restore();
   }
 
   if(detached && s.body && s.body.trim()!==""){
@@ -2670,7 +2795,11 @@ async function renderSlideCanvas(s, idx){
     ctx.textAlign = bAlign==="center" ? "center" : "left";
     ctx.fillStyle = s.textColor;
     ctx.font = `${fp.bodyWeight} ${dFit.px}px "${fp.bodyName}"`;
-    dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx, bStartY + i*dBodyLH); });
+    const dBodyAnimState = animMs!=null ? computeBodyAnimState(s.textAnim||"none", animMs) : {opacity:1, dy:0};
+    ctx.save();
+    ctx.globalAlpha = dBodyAnimState.opacity;
+    dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx, bStartY + dBodyAnimState.dy + i*dBodyLH); });
+    ctx.restore();
   }
 
   if(state.showPageNum){
@@ -2750,6 +2879,41 @@ async function renderSlideCanvas(s, idx){
 
   return canvas;
 }
+/* Reels export (9:16): takes whatever the slide already looks like at the deck's own
+   aspect ratio (renderSlideCanvas, untouched) and centers it inside a 1080x1920 canvas,
+   filling the extra top/bottom space intelligently instead of plain black/color bars:
+   if the slide has a photo, that same photo is stretched to cover the full 9:16 frame and
+   blurred (the same trick Instagram itself uses when you post a non-Stories-shaped photo)
+   with a soft dark scrim so the sharp inner slide reads clearly on top; with no photo, the
+   slide's own background color already IS the "extension" \u2014 a solid fill in that color
+   reads as intentional rather than a fallback letterbox.*/
+async function renderSlideCanvasReels(s, idx, animMs){
+  const REELS_W = 1080, REELS_H = 1920;
+  const inner = await renderSlideCanvas(s, idx, animMs);
+  const canvas = document.createElement("canvas");
+  canvas.width = REELS_W; canvas.height = REELS_H;
+  const ctx = canvas.getContext("2d");
+
+  if(s.image){
+    let img = s.imageEl;
+    if(!img || !img.complete) img = await loadImageEl(s.image);
+    ctx.save();
+    ctx.filter = "blur(60px)";
+    // 1.15x overscan so the blur radius never reveals a sharp canvas edge at the border
+    const scale = Math.max(REELS_W/img.naturalWidth, REELS_H/img.naturalHeight) * 1.15;
+    const dw = img.naturalWidth*scale, dh = img.naturalHeight*scale;
+    ctx.drawImage(img, (REELS_W-dw)/2, (REELS_H-dh)/2, dw, dh);
+    ctx.restore();
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.fillRect(0,0,REELS_W,REELS_H);
+  } else {
+    ctx.fillStyle = s.bgColor;
+    ctx.fillRect(0,0,REELS_W,REELS_H);
+  }
+
+  ctx.drawImage(inner, (REELS_W-inner.width)/2, (REELS_H-inner.height)/2);
+  return canvas;
+}
 function roundRect(ctx,x,y,w,h,r){
   ctx.beginPath(); ctx.moveTo(x+r,y);
   ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
@@ -2760,6 +2924,138 @@ async function exportCurrentPNG(){
   await ensureFontsReady();
   const canvas = await renderSlideCanvas(state.slides[state.active], state.active);
   canvas.toBlob(blob=>saveBlob(blob, `slide-${state.active+1}.png`), "image/png");
+}
+async function exportCurrentReels(){
+  await ensureFontsReady();
+  const canvas = await renderSlideCanvasReels(state.slides[state.active], state.active);
+  canvas.toBlob(blob=>saveBlob(blob, `slide-${state.active+1}-reels.png`), "image/png");
+}
+async function exportAllReels(){
+  await ensureFontsReady();
+  const zip = new JSZip();
+  for(let i=0;i<state.slides.length;i++){
+    const canvas = await renderSlideCanvasReels(state.slides[i], i);
+    const blob = await new Promise(res=>canvas.toBlob(res,"image/png"));
+    zip.file(`slide-${i+1}-reels.png`, blob);
+  }
+  const content = await zip.generateAsync({type:"blob"});
+  saveBlob(content, "carousel-reels.zip");
+}
+
+/* ====================== VIDEO EXPORT (MP4, via ffmpeg.wasm) ======================
+   No server, no new always-loaded dependency: ffmpeg.wasm (~25MB) is only fetched from
+   a CDN the moment someone actually clicks an Export Video option, never on page load.
+   Pipeline: render each slide frame-by-frame (reusing renderSlideCanvas/
+   renderSlideCanvasReels with the animMs parameter added for text animation), write each
+   frame as a PNG into ffmpeg's virtual filesystem, then run a single ffmpeg encode over
+   the whole sequence to produce one continuous H.264 MP4 (not one file per slide). */
+const VIDEO_FPS = 20;
+let ffmpegInstance = null;
+let ffmpegLoadingPromise = null;
+async function loadFFmpeg(){
+  if(ffmpegInstance) return ffmpegInstance;
+  if(ffmpegLoadingPromise) return ffmpegLoadingPromise; // a concurrent call is already loading it \u2014 share that instead of racing a second load
+  ffmpegLoadingPromise = (async ()=>{
+    if(!window.FFmpeg){
+      await new Promise((resolve, reject)=>{
+        const el = document.createElement("script");
+        el.src = "https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js";
+        el.onload = resolve;
+        el.onerror = ()=>reject(new Error("Couldn't load the video encoder from the CDN \u2014 check your internet connection"));
+        document.head.appendChild(el);
+      });
+    }
+    const { createFFmpeg } = window.FFmpeg;
+    const instance = createFFmpeg({
+      log:false,
+      corePath:"https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
+    });
+    await instance.load();
+    // load() can resolve without the internal worker actually being ready (this is exactly
+    // the "ffmpeg.wasm is not ready" error people hit) \u2014 most commonly when the page is
+    // opened as a local file (file:// or content://, as on a downloaded .html on Android)
+    // rather than served over http(s). ffmpeg.wasm creates a Web Worker internally, and
+    // several browsers restrict/blockworker creation from a "null" local-file origin. Check
+    // explicitly so the error message points at the real cause instead of the cryptic one.
+    if(typeof instance.isLoaded === "function" && !instance.isLoaded()){
+      throw new Error("The video encoder didn't finish starting. This usually happens when the app is opened as a downloaded file instead of through a website \u2014 ffmpeg.wasm needs a real http(s) address to run its worker. Try hosting this file (e.g. GitHub Pages) instead of opening it directly.");
+    }
+    ffmpegInstance = instance;
+    return instance;
+  })();
+  try{
+    return await ffmpegLoadingPromise;
+  }catch(e){
+    ffmpegInstance = null; // don't cache a failed instance \u2014 let a retry attempt a fresh load
+    throw e;
+  }finally{
+    ffmpegLoadingPromise = null;
+  }
+}
+function openVideoProgress(){
+  document.getElementById("videoProgressBackdrop").classList.add("open");
+  document.getElementById("videoProgressModal").classList.add("open");
+  setVideoProgress(0, "Preparing\u2026");
+}
+function closeVideoProgress(){
+  document.getElementById("videoProgressBackdrop").classList.remove("open");
+  document.getElementById("videoProgressModal").classList.remove("open");
+}
+function setVideoProgress(ratio, text){
+  document.getElementById("videoProgressFill").style.width = Math.round(ratio*100)+"%";
+  document.getElementById("videoProgressText").textContent = text;
+}
+async function exportVideoMP4(useReels){
+  if(!state.slides.length) return;
+  openVideoProgress();
+  try{
+    await ensureFontsReady();
+    setVideoProgress(0, "Loading video encoder\u2026 (one-time download, ~25MB)");
+    const ffmpeg = await loadFFmpeg();
+
+    const framesPerSlide = Math.max(1, Math.round((storyDuration/1000)*VIDEO_FPS));
+    const totalFrames = framesPerSlide*state.slides.length;
+    let frameIdx = 0;
+    for(let i=0;i<state.slides.length;i++){
+      const s = state.slides[i];
+      for(let f=0; f<framesPerSlide; f++){
+        const elapsedMs = (f/VIDEO_FPS)*1000;
+        const canvas = useReels
+          ? await renderSlideCanvasReels(s, i, elapsedMs)
+          : await renderSlideCanvas(s, i, elapsedMs);
+        const blob = await new Promise(res=>canvas.toBlob(res, "image/png"));
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        ffmpeg.FS("writeFile", `frame${String(frameIdx).padStart(6,"0")}.png`, buf);
+        frameIdx++;
+        if(frameIdx % 5 === 0 || frameIdx===totalFrames){
+          setVideoProgress(frameIdx/totalFrames*0.7, `Rendering frames\u2026 ${frameIdx}/${totalFrames}`);
+        }
+      }
+    }
+
+    setVideoProgress(0.72, "Encoding video\u2026");
+    ffmpeg.setProgress(({ratio})=>{
+      if(ratio>=0 && ratio<=1) setVideoProgress(0.72+ratio*0.28, `Encoding video\u2026 ${Math.round(ratio*100)}%`);
+    });
+    await ffmpeg.run(
+      "-framerate", String(VIDEO_FPS),
+      "-i", "frame%06d.png",
+      "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
+      "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+      "out.mp4"
+    );
+    const data = ffmpeg.FS("readFile", "out.mp4");
+    const blob = new Blob([data.buffer], {type:"video/mp4"});
+    for(let k=0;k<frameIdx;k++){ try{ ffmpeg.FS("unlink", `frame${String(k).padStart(6,"0")}.png`); }catch(e){} }
+    try{ ffmpeg.FS("unlink","out.mp4"); }catch(e){}
+
+    closeVideoProgress();
+    saveBlob(blob, useReels ? "carousel-reels.mp4" : "carousel-video.mp4");
+  }catch(e){
+    closeVideoProgress();
+    showToast("Video export failed: "+(e && e.message ? e.message : "unknown error"));
+  }
 }
 async function exportAllPNG(){
   await ensureFontsReady();
