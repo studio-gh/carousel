@@ -172,13 +172,7 @@
     font-size:14px; cursor:grab; touch-action:none; box-shadow:0 2px 6px rgba(0,0,0,.4); z-index:5;
   }
   .text-drag-handle.dragging{cursor:grabbing;}
-  .slide-overlay{position:absolute; pointer-events:none;}
-  .slide-overlay.dir-bottom{background:linear-gradient(to bottom, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
-  .slide-overlay.dir-top{background:linear-gradient(to top, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
-  .slide-overlay.dir-left{background:linear-gradient(to left, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
-  .slide-overlay.dir-right{background:linear-gradient(to right, rgba(0,0,0,0) 25%, rgba(0,0,0,var(--ov)) 100%);}
-  .slide-overlay.dir-radial{background:radial-gradient(circle, rgba(0,0,0,0) 35%, rgba(0,0,0,var(--ov)) 100%);}
-  .slide-overlay.dir-flat{background:rgba(0,0,0,var(--ov));}
+  .slide-overlay{position:absolute; pointer-events:none;} /* background set inline via overlayCSSBackground() so overlayColor can be any hex */
   .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible; pointer-events:none;}
   .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle{ pointer-events:auto; }
   .text-resize-handle{
@@ -580,7 +574,7 @@ function blankSlideDefaults(){
   return {
     image:null, imageEl:null, layout:"full",
     imageScale:1, imageOffsetX:0.5, imageOffsetY:0.5, imageInset:0,
-    overlayDirection:"bottom", overlayOpacity:55,
+    overlayDirection:"bottom", overlayOpacity:55, overlayColor:"#000000",
     textOffsetX:0, textOffsetY:0,
     signatureColor:null,
     sigTL:"", sigTR:"", sigBL:"", sigBR:"", sigDivider:true,
@@ -727,6 +721,27 @@ function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 function escapeXML(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;"); }
 function escAttr(s){ return (s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;"); }
 const HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+function hexToRgb(hex){
+  let h = (hex||"#000000").replace("#","");
+  if(h.length===3) h = h.split("").map(c=>c+c).join("");
+  const num = parseInt(h,16) || 0;
+  return { r:(num>>16)&255, g:(num>>8)&255, b:num&255 };
+}
+/* Shared by the DOM preview: builds the same clear-to-color gradient/flat fill that
+   paintOverlayCanvas() and overlaySVG() produce, just as a CSS background string, so all
+   3 render paths stay visually identical when overlayColor changes. */
+function overlayCSSBackground(dir, hex, opacity){
+  if(!dir || dir==="none") return "none";
+  const {r,g,b} = hexToRgb(hex);
+  const c0 = `rgba(${r},${g},${b},0)`, c1 = `rgba(${r},${g},${b},${opacity})`;
+  if(dir==="flat") return c1;
+  if(dir==="top") return `linear-gradient(to top, ${c0} 25%, ${c1} 100%)`;
+  if(dir==="bottom") return `linear-gradient(to bottom, ${c0} 25%, ${c1} 100%)`;
+  if(dir==="left") return `linear-gradient(to left, ${c0} 25%, ${c1} 100%)`;
+  if(dir==="right") return `linear-gradient(to right, ${c0} 25%, ${c1} 100%)`;
+  if(dir==="radial") return `radial-gradient(circle, ${c0} 35%, ${c1} 100%)`;
+  return "none";
+}
 function colorFieldHTML(id, value){
   const v = value || "#000000";
   return `<div class="colorfield">
@@ -1705,13 +1720,17 @@ function renderSidebar(){
     </div>
     `:`<div class="empty-hint">Upload a small logo to place it as a watermark \u2014 top, bottom, center, or any corner.</div>`}
     `)}
-    ${sec("overlay", "Overlay (darken)", `
+    ${sec("overlay", "Overlay (tint)", `
     ${s.image ? (s.layout==="full" ? `
       <div class="overlay-grid" id="segOverlayDir">
         ${Object.keys(OVERLAY_DIRS).map(k=>`<div class="overlay-opt ${s.overlayDirection===k?"active":""}" data-k="${k}" role="button" tabindex="0" aria-pressed="${s.overlayDirection===k}" aria-label="Overlay: ${OVERLAY_DIRS[k]}">${OVERLAY_DIRS[k]}</div>`).join("")}
       </div>
-      <div class="empty-hint">"Flat" is a solid darken. The others fade from clear to dark in that direction \u2014 use the opacity slider below to adjust strength.</div>
+      <div class="empty-hint">"Flat" is a solid tint. The others fade from clear to that color in that direction \u2014 use the opacity slider below to adjust strength.</div>
       <div id="overlayOpacityField" ${s.overlayDirection==="none"?"style=display:none":""}>
+        <div class="field">
+          <label>Overlay color</label>
+          ${colorFieldHTML("overlayColor", s.overlayColor||"#000000")}
+        </div>
         ${rangeField("overlayRange", "Overlay opacity", 0, 90, 1, s.overlayOpacity, s.overlayOpacity+"%")}
       </div>
       ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" to enable the overlay \u2014 split layouts put text on solid color instead.</div>`
@@ -2012,6 +2031,7 @@ function renderSidebar(){
     ovRange.oninput = e=>{ s.overlayOpacity = +e.target.value; document.getElementById("overlayLabel").textContent = e.target.value+"%"; renderStage(); };
     ovRange.onchange = ()=>commitThumb(state.active);
   }
+  wireColorField("overlayColor", v=>{ s.overlayColor = v; renderStage(); }, ()=>commitThumb(state.active));
 
   document.querySelectorAll("#segPos button").forEach(b=>b.onclick=()=>{
     s.position=b.dataset.k;
@@ -2108,11 +2128,11 @@ function buildSlideDOM(s, idx, editable, W){
 
     if((s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none"){
       const ov = document.createElement("div");
-      ov.className = `slide-overlay dir-${s.overlayDirection}`;
+      ov.className = "slide-overlay";
       ov.style.left = boxes.image.x+"px"; ov.style.top = boxes.image.y+"px";
       ov.style.width = boxes.image.w+"px"; ov.style.height = boxes.image.h+"px";
       ov.style.borderRadius = ((s.imageRadius||0)*W)+"px";
-      ov.style.setProperty("--ov", (s.overlayOpacity??55)/100);
+      ov.style.background = overlayCSSBackground(s.overlayDirection, s.overlayColor||"#000000", (s.overlayOpacity??55)/100);
       div.appendChild(ov);
     }
   }
@@ -2668,16 +2688,18 @@ function blendToCanvasOp(blend){
   return blend;
 }
 
-function paintOverlayCanvas(ctx, box, dir, opacity, radius){
+function paintOverlayCanvas(ctx, box, dir, opacity, radius, hex){
   if(!dir || dir==="none") return;
   const {x,y,w,h} = box;
+  const {r,g,b} = hexToRgb(hex);
+  const c0 = `rgba(${r},${g},${b},0)`, c1 = `rgba(${r},${g},${b},${opacity})`;
   let grad;
-  if(dir==="bottom"){ grad = ctx.createLinearGradient(x,y+h*0.25,x,y+h); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
-  else if(dir==="top"){ grad = ctx.createLinearGradient(x,y+h,x,y+h*0.25); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
-  else if(dir==="left"){ grad = ctx.createLinearGradient(x+w,y,x+w*0.25,y); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
-  else if(dir==="right"){ grad = ctx.createLinearGradient(x,y,x+w*0.75,y); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
-  else if(dir==="radial"){ grad = ctx.createRadialGradient(x+w/2,y+h/2, Math.min(w,h)*0.05, x+w/2,y+h/2, Math.max(w,h)*0.62); grad.addColorStop(0,"rgba(0,0,0,0)"); grad.addColorStop(0.55,"rgba(0,0,0,0)"); grad.addColorStop(1,`rgba(0,0,0,${opacity})`); }
-  else if(dir==="flat"){ ctx.save(); roundRectPath(ctx,x,y,w,h,radius||0); ctx.clip(); ctx.fillStyle = `rgba(0,0,0,${opacity})`; ctx.fillRect(x,y,w,h); ctx.restore(); return; }
+  if(dir==="bottom"){ grad = ctx.createLinearGradient(x,y+h*0.25,x,y+h); grad.addColorStop(0,c0); grad.addColorStop(1,c1); }
+  else if(dir==="top"){ grad = ctx.createLinearGradient(x,y+h,x,y+h*0.25); grad.addColorStop(0,c0); grad.addColorStop(1,c1); }
+  else if(dir==="left"){ grad = ctx.createLinearGradient(x+w,y,x+w*0.25,y); grad.addColorStop(0,c0); grad.addColorStop(1,c1); }
+  else if(dir==="right"){ grad = ctx.createLinearGradient(x,y,x+w*0.75,y); grad.addColorStop(0,c0); grad.addColorStop(1,c1); }
+  else if(dir==="radial"){ grad = ctx.createRadialGradient(x+w/2,y+h/2, Math.min(w,h)*0.05, x+w/2,y+h/2, Math.max(w,h)*0.62); grad.addColorStop(0,c0); grad.addColorStop(0.55,c0); grad.addColorStop(1,c1); }
+  else if(dir==="flat"){ ctx.save(); roundRectPath(ctx,x,y,w,h,radius||0); ctx.clip(); ctx.fillStyle = c1; ctx.fillRect(x,y,w,h); ctx.restore(); return; }
   if(grad){ ctx.save(); roundRectPath(ctx,x,y,w,h,radius||0); ctx.clip(); ctx.fillStyle = grad; ctx.fillRect(x,y,w,h); ctx.restore(); }
 }
 
@@ -2713,7 +2735,7 @@ async function renderSlideCanvas(s, idx, animMs){
     }
 
     if((s.layout||"full")==="full"){
-      paintOverlayCanvas(ctx, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, radiusPx);
+      paintOverlayCanvas(ctx, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, radiusPx, s.overlayColor||"#000000");
     }
   }
 
@@ -3087,18 +3109,20 @@ async function exportAllPNGSeparate(){
 }
 
 /* ============================= EXPORT: SVG ============================= */
-function overlaySVG(defs, body, box, dir, opacity, gid, clipId){
+function overlaySVG(defs, body, box, dir, opacity, gid, clipId, hex){
   if(!dir || dir==="none") return {defs, body};
   const {x,y,w,h} = box;
+  const {r,g,b} = hexToRgb(hex);
+  const stopColor = `rgb(${r},${g},${b})`;
   const wrap = inner => clipId ? `<g clip-path="url(#${clipId})">${inner}</g>` : inner;
-  if(dir==="flat"){ body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="black" fill-opacity="${opacity.toFixed(3)}"/>`); return {defs, body}; }
+  if(dir==="flat"){ body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${stopColor}" fill-opacity="${opacity.toFixed(3)}"/>`); return {defs, body}; }
   if(dir==="radial"){
-    defs += `<radialGradient id="${gid}" cx="50%" cy="50%" r="62%"><stop offset="0" stop-color="black" stop-opacity="0"/><stop offset="55%" stop-color="black" stop-opacity="0"/><stop offset="100%" stop-color="black" stop-opacity="${opacity}"/></radialGradient>`;
+    defs += `<radialGradient id="${gid}" cx="50%" cy="50%" r="62%"><stop offset="0" stop-color="${stopColor}" stop-opacity="0"/><stop offset="55%" stop-color="${stopColor}" stop-opacity="0"/><stop offset="100%" stop-color="${stopColor}" stop-opacity="${opacity}"/></radialGradient>`;
     body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${gid})"/>`);
     return {defs, body};
   }
   const coords = { bottom:["0","0","0","1"], top:["0","1","0","0"], left:["1","0","0","0"], right:["0","0","1","0"] }[dir];
-  defs += `<linearGradient id="${gid}" x1="${coords[0]}" y1="${coords[1]}" x2="${coords[2]}" y2="${coords[3]}"><stop offset="25%" stop-color="black" stop-opacity="0"/><stop offset="100%" stop-color="black" stop-opacity="${opacity}"/></linearGradient>`;
+  defs += `<linearGradient id="${gid}" x1="${coords[0]}" y1="${coords[1]}" x2="${coords[2]}" y2="${coords[3]}"><stop offset="25%" stop-color="${stopColor}" stop-opacity="0"/><stop offset="100%" stop-color="${stopColor}" stop-opacity="${opacity}"/></linearGradient>`;
   body += wrap(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${gid})"/>`);
   return {defs, body};
 }
@@ -3132,7 +3156,7 @@ function buildSlideSVG(s, idx){
     }
 
     if((s.layout||"full")==="full"){
-      const res = overlaySVG(defs, body, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, `grad${idx}`, clipId);
+      const res = overlaySVG(defs, body, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, `grad${idx}`, clipId, s.overlayColor||"#000000");
       defs = res.defs; body = res.body;
     }
   }
