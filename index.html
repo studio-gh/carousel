@@ -220,7 +220,7 @@
   .thumb-wrap.active .thumb-frame{border-color:var(--accent-ui);}
   .thumb-inner{transform-origin:top left; pointer-events:none;}
   .thumb-num{font-size:11px; color:var(--muted); text-align:center; margin-top:5px; font-weight:600;}
-  .thumb-actions{ position:absolute; top:3px; right:3px; display:flex; gap:3px; opacity:0; transition:.12s; }
+  .thumb-actions{ position:absolute; top:3px; right:3px; display:flex; gap:3px; opacity:.65; transition:.12s; }
   .thumb-wrap:hover .thumb-actions{opacity:1;}
   .thumb-actions button{
     width:18px; height:18px; border-radius:4px; border:none; background:rgba(20,22,26,.65);
@@ -1440,7 +1440,7 @@ function layoutIcon(kind){
 // Which collapsible sections start open. Persists for the session (not per-slide).
 const sidebarOpenState = {
   deck:true, templates:true, badge:false,
-  layout:true, content:true, image:true, layer2:false, logo:false, overlay:false, signature:false, colors:false,
+  layout:true, content:true, image:true, layer2:false, logo:true, overlay:false, signature:true, colors:false,
 };
 function sec(id, title, innerHtml){
   const open = !!sidebarOpenState[id];
@@ -1689,6 +1689,10 @@ function renderSidebar(){
         ])}
       </div>
       <div class="empty-hint">Pick which layer to drag \u2014 they share the same spot on the canvas, so only one moves at a time.</div>
+      <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+        <button class="btn small full" id="applyLayer2AllBtn">Apply this layer 2 to all slides</button>
+        <div class="empty-hint" style="margin-top:6px;">Copies the texture/image, zoom, opacity, and blend mode to every slide.</div>
+      </div>
       `:`<div class="empty-hint">Add a second image to blend on top of the photo (grain, texture, double exposure).</div>`}
     </div>
     `:`<div class="empty-hint">Upload a photo to enable zoom, reposition, overlay, and a second image layer.</div>`}
@@ -1717,6 +1721,10 @@ function renderSidebar(){
         <div class="logo-pos-opt ${s.logoPos==="bottom"?"active":""}" data-k="bottom" role="button" tabindex="0" aria-label="Bottom center"><span></span></div>
         <div class="logo-pos-opt ${s.logoPos==="br"?"active":""}" data-k="br" role="button" tabindex="0" aria-label="Bottom right"><span></span></div>
       </div>
+    </div>
+    <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+      <button class="btn small full" id="applyLogoAllBtn">Apply this logo to all slides</button>
+      <div class="empty-hint" style="margin-top:6px;">Copies the logo, size, and position to every slide in this carousel.</div>
     </div>
     `:`<div class="empty-hint">Upload a small logo to place it as a watermark \u2014 top, bottom, center, or any corner.</div>`}
     `)}
@@ -1759,6 +1767,10 @@ function renderSidebar(){
     <div class="field">
       <label>Signature color</label>
       ${colorFieldHTML("signatureColor", s.signatureColor||s.textColor)}
+    </div>
+    <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+      <button class="btn small full" id="applySigAllBtn">Apply this signature to all slides</button>
+      <div class="empty-hint" style="margin-top:6px;">Copies the bar text, divider, and color to every slide.</div>
     </div>
     `)}
     ${sec("colors", "Colors", `
@@ -1920,6 +1932,15 @@ function renderSidebar(){
   const sigDividerToggle = document.getElementById("sigDividerToggle");
   if(sigDividerToggle) sigDividerToggle.onchange = e=>{ s.sigDivider = e.target.checked; renderStage(); commitThumb(state.active); };
   wireColorField("signatureColor", v=>{ s.signatureColor=v; renderStage(); }, ()=>commitThumb(state.active));
+  const applySigAllBtn = document.getElementById("applySigAllBtn");
+  if(applySigAllBtn) applySigAllBtn.onclick = ()=>{
+    state.slides.forEach(sl=>{
+      sl.sigTL = s.sigTL; sl.sigTR = s.sigTR; sl.sigBL = s.sigBL; sl.sigBR = s.sigBR;
+      sl.sigDivider = s.sigDivider; sl.signatureColor = s.signatureColor;
+    });
+    renderAll();
+    showToast("Signature applied to all " + state.slides.length + " slides");
+  };
 
   wireColorField("bgColor", v=>{ s.bgColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
   wireColorField("textColor", v=>{ s.textColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
@@ -1984,6 +2005,15 @@ function renderSidebar(){
   document.querySelectorAll("#logoPosGrid .logo-pos-opt[data-k]").forEach(opt=>{
     opt.onclick = ()=>{ s.logoPos = opt.dataset.k; renderSidebar(); renderStage(); commitThumb(state.active); };
   });
+  const applyLogoAllBtn = document.getElementById("applyLogoAllBtn");
+  if(applyLogoAllBtn) applyLogoAllBtn.onclick = ()=>{
+    state.slides.forEach(sl=>{
+      sl.logoImage = s.logoImage; sl.logoImageEl = s.logoImageEl;
+      sl.logoPos = s.logoPos; sl.logoSize = s.logoSize;
+    });
+    renderAll();
+    showToast("Logo applied to all " + state.slides.length + " slides");
+  };
 
   // ---- Layer 2 (texture / grain / double exposure) ----
   const uploadBtn2 = document.getElementById("uploadBtn2");
@@ -2014,6 +2044,16 @@ function renderSidebar(){
     document.querySelectorAll("#segDragLayer button").forEach(x=>x.classList.toggle("active", x===b));
     renderStage();
   });
+  const applyLayer2AllBtn = document.getElementById("applyLayer2AllBtn");
+  if(applyLayer2AllBtn) applyLayer2AllBtn.onclick = ()=>{
+    state.slides.forEach(sl=>{
+      sl.layer2Image = s.layer2Image; sl.layer2ImageEl = s.layer2ImageEl;
+      sl.layer2Scale = s.layer2Scale; sl.layer2OffsetX = s.layer2OffsetX; sl.layer2OffsetY = s.layer2OffsetY;
+      sl.layer2Opacity = s.layer2Opacity; sl.layer2Blend = s.layer2Blend;
+    });
+    renderAll();
+    showToast("Layer 2 applied to all " + state.slides.length + " slides");
+  };
 
   document.querySelectorAll(".overlay-opt").forEach(opt=>{
     const activate = ()=>{
@@ -2541,7 +2581,7 @@ function buildThumb(idx){
   wrap.appendChild(num);
   const actions = document.createElement("div");
   actions.className = "thumb-actions";
-  actions.innerHTML = `<button title="Duplicate">\u2295</button><button title="Delete">\u2715</button>`;
+  actions.innerHTML = `<button title="Duplicate this slide (copy inserted right after)">\u2295</button><button title="Delete this slide">\u2715</button>`;
   actions.children[0].onclick = (e)=>{ e.stopPropagation(); const clone=cloneSlide(state.slides[idx]); state.slides.splice(idx+1,0,clone); state.active=idx+1; renderAll(); };
   actions.children[1].onclick = (e)=>{ e.stopPropagation(); if(state.slides.length>1){ state.slides.splice(idx,1); state.active=Math.max(0,Math.min(state.active,state.slides.length-1)); renderAll(); } };
   wrap.appendChild(actions);
