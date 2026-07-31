@@ -814,7 +814,7 @@ function headingHTML(raw, textColor, accentColor){
       const chunk = escapeXML(plain.slice(seg.start, seg.end));
       if(seg.style==="accent") html += `<span style="color:${accentColor};">${chunk}</span>`;
       else if(seg.style==="outline") html += `<span style="color:${textColor};-webkit-text-fill-color:transparent;-webkit-text-stroke:1.3px ${textColor};">${chunk}</span>`;
-      else if(seg.style==="highlight") html += `<span style="background-image:linear-gradient(${accentColor},${accentColor});background-repeat:no-repeat;background-size:100% 0.9em;background-position:0 95%;color:${contrastTextColor(accentColor)};padding:0 .1em;box-decoration-break:clone;-webkit-box-decoration-break:clone;">${chunk}</span>`;
+      else if(seg.style==="highlight") html += `<span style="background-image:linear-gradient(${accentColor},${accentColor});background-repeat:no-repeat;background-size:100% 1.05em;background-position:0 90%;color:${contrastTextColor(accentColor)};padding:0 .1em;box-decoration-break:clone;-webkit-box-decoration-break:clone;">${chunk}</span>`;
       cursor = seg.end;
     });
     html += escapeXML(plain.slice(cursor));
@@ -1550,7 +1550,7 @@ function textSizes(W, s){
   // When the body text is detached into its own box, it auto-shrinks independently
   // (its own box may be a different size than the headline's), so it needs its own scale.
   const bt = s.bodyDetached ? (s.bodyTscale||1) : ht;
-  return { headPx:headBase*ht, bodyPx:bodyBase*bt, headLH:headBase*ht*1.08, bodyLH:bodyBase*bt*1.35, gap:W*0.03 };
+  return { headPx:headBase*ht, bodyPx:bodyBase*bt, headLH:headBase*ht*1.15, bodyLH:bodyBase*bt*1.35, gap:W*0.03 };
 }
 
 /* ============================= SIDEBAR ============================= */
@@ -2371,7 +2371,7 @@ function buildSlideDOM(s, idx, editable, W){
 
   const h = document.createElement("div");
   h.className = "slide-heading"; h.style.color = s.textColor;
-  h.style.fontFamily = fp.headFont; h.style.fontWeight = fp.headWeight; h.style.fontSize = ts.headPx+"px"; h.style.lineHeight = "1.08";
+  h.style.fontFamily = fp.headFont; h.style.fontWeight = fp.headWeight; h.style.fontSize = ts.headPx+"px"; h.style.lineHeight = "1.15";
   h.contentEditable = editable ? "true" : "false"; h.spellcheck = false;
   h.innerHTML = headingHTML(s.heading, s.textColor, s.headAccentColor||DEFAULT_HEAD_ACCENT);
   if(editable){
