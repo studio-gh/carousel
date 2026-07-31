@@ -720,6 +720,129 @@ document.addEventListener("keydown", e=>{
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 function escapeXML(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;"); }
 function escAttr(s){ return (s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;"); }
+
+/* ===================== HEADLINE EMPHASIS (per-word color / outline / highlight) =====================
+   Users mark words in the headline textarea with lightweight inline markup instead of a rich-text
+   selection UI, since the same string has to drive three completely different renderers (DOM,
+   Canvas, SVG). Syntax: *word* = solid accent color, _word_ = hollow outline, ~word~ = highlighter
+   marker behind the word. The sidebar buttons insert these around the current textarea selection;
+   nothing stops someone typing them by hand too. Kept out of s.heading's shape entirely (still a
+   plain string) so duplicate/apply-to-all/save-load need zero changes to carry it along. */
+const DEFAULT_HEAD_ACCENT = "#FF5A36";
+function parseMarkupSegments(text){
+  const re = /\*([^*\n]+)\*|_([^_\n]+)_|~([^~\n]+)~/g;
+  let plain = "", segs = [], lastIndex = 0, m;
+  while((m = re.exec(text))){
+    plain += text.slice(lastIndex, m.index);
+    let style, inner;
+    if(m[1]!==undefined){ style="accent"; inner=m[1]; }
+    else if(m[2]!==undefined){ style="outline"; inner=m[2]; }
+    else { style="highlight"; inner=m[3]; }
+    const start = plain.length;
+    plain += inner;
+    segs.push({start, end:plain.length, style});
+    lastIndex = re.lastIndex;
+  }
+  plain += text.slice(lastIndex);
+  return {plain, segs};
+}
+function headingPlainText(raw){
+  return (raw||"").split("\n").map(p=>parseMarkupSegments(p).plain).join("\n");
+}
+function tokenizeHeadingStyled(raw){
+  return (raw||"").split("\n").map(p=>{
+    if(p==="") return [];
+    const {plain, segs} = parseMarkupSegments(p);
+    const words = [];
+    let idx = 0;
+    plain.split(" ").forEach((w,i)=>{
+      if(i>0) idx += 1;
+      const start = idx, end = idx+w.length;
+      let style = null;
+      for(const seg of segs){ if(seg.start<end && seg.end>start){ style = seg.style; break; } }
+      if(w!=="") words.push({text:w, style});
+      idx = end;
+    });
+    return words;
+  });
+}
+function wrapStyledLines(ctx, raw, maxWidth){
+  const paras = tokenizeHeadingStyled(raw);
+  const lines = [];
+  paras.forEach(words=>{
+    if(words.length===0){ lines.push([]); return; }
+    let line = [], lineText = "";
+    words.forEach(w=>{
+      const testText = lineText ? lineText+" "+w.text : w.text;
+      if(ctx.measureText(testText).width > maxWidth && lineText){
+        lines.push(line); line = [w]; lineText = w.text;
+      } else { line.push(w); lineText = testText; }
+    });
+    lines.push(line);
+  });
+  return lines;
+}
+function measureTokenLineWidth(ctx, tokens){
+  let w = 0;
+  tokens.forEach((t,i)=>{ if(i>0) w += ctx.measureText(" ").width; w += ctx.measureText(t.text).width; });
+  return w;
+}
+/* Returns each token's absolute x (left edge) for a line, given the anchor x (xRef) and
+   alignment. Used by both Canvas (fillText) and SVG (tspan x) so the two never drift. */
+function layoutTokenLine(ctx, tokens, xRef, align){
+  const lineW = measureTokenLineWidth(ctx, tokens);
+  let curX = align==="center" ? xRef-lineW/2 : xRef;
+  const items = [];
+  tokens.forEach((t,i)=>{
+    if(i>0) curX += ctx.measureText(" ").width;
+    const w = ctx.measureText(t.text).width;
+    items.push({tok:t, x:curX, w});
+    curX += w;
+  });
+  return {lineW, items};
+}
+/* DOM rendering: turns the raw markup string into escaped HTML with styled <span>s. Only used
+   when the heading div ISN'T being actively typed into (see focus/blur handling in buildSlideDOM)
+   \u2014 while focused it shows the raw markup so it stays directly editable as plain text. */
+function headingHTML(raw, textColor, accentColor){
+  return (raw||"").split("\n").map(p=>{
+    const {plain, segs} = parseMarkupSegments(p);
+    if(segs.length===0) return escapeXML(plain) || "&nbsp;";
+    let html = "", cursor = 0;
+    segs.forEach(seg=>{
+      html += escapeXML(plain.slice(cursor, seg.start));
+      const chunk = escapeXML(plain.slice(seg.start, seg.end));
+      if(seg.style==="accent") html += `<span style="color:${accentColor};">${chunk}</span>`;
+      else if(seg.style==="outline") html += `<span style="color:${textColor};-webkit-text-fill-color:transparent;-webkit-text-stroke:1.3px ${textColor};">${chunk}</span>`;
+      else if(seg.style==="highlight") html += `<span style="background:${accentColor};color:${contrastTextColor(accentColor)};padding:0 .1em;box-decoration-break:clone;-webkit-box-decoration-break:clone;">${chunk}</span>`;
+      cursor = seg.end;
+    });
+    html += escapeXML(plain.slice(cursor));
+    return html;
+  }).join("<br>");
+}
+/* Wraps the current selection in a headline textarea with a markup delimiter (toggles it off if
+   the selection is already wrapped with that exact delimiter), then re-focuses with the
+   selection preserved so someone can keep applying different styles without re-selecting. */
+function toggleHeadingMarkup(textarea, delim){
+  const start = textarea.selectionStart, end = textarea.selectionEnd;
+  if(start===end) return false;
+  const val = textarea.value;
+  const before = val.slice(0, start), sel = val.slice(start, end), after = val.slice(end);
+  let next, newStart, newEnd;
+  if(before.endsWith(delim) && after.startsWith(delim)){
+    next = before.slice(0, -delim.length) + sel + after.slice(delim.length);
+    newStart = start - delim.length; newEnd = end - delim.length;
+  } else {
+    next = before + delim + sel + delim + after;
+    newStart = start + delim.length; newEnd = end + delim.length;
+  }
+  textarea.value = next;
+  textarea.focus();
+  textarea.setSelectionRange(newStart, newEnd);
+  return true;
+}
+
 const HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 function hexToRgb(hex){
   let h = (hex||"#000000").replace("#","");
@@ -923,7 +1046,8 @@ const TEXT_ANIMS = {
    uses typewriter (would make longer support text tedious to read) and starts slightly
    after the heading so the entrance reads as sequenced, not simultaneous. */
 function computeHeadingAnimState(animType, elapsedMs, headingText){
-  const len = headingText ? headingText.length : 0;
+  const plainLen = headingText ? headingPlainText(headingText).length : 0;
+  const len = plainLen;
   if(animType==="none" || !headingText) return {opacity:1, dy:0, dx:0, revealLen:len};
   if(animType==="typewriter"){
     const totalMs = Math.min(len*28, 2200);
@@ -958,7 +1082,11 @@ function startTextAnim(slideEl, s){
       const hs = computeHeadingAnimState(anim, elapsed, fullHeading);
       heading.style.opacity = hs.opacity;
       heading.style.transform = `translate(${hs.dx||0}px, ${hs.dy}px)`;
-      if(anim==="typewriter") heading.textContent = fullHeading.slice(0, hs.revealLen);
+      if(anim==="typewriter"){
+        const stripped = headingPlainText(fullHeading);
+        if(hs.revealLen >= stripped.length) heading.innerHTML = headingHTML(fullHeading, s.textColor, s.headAccentColor||DEFAULT_HEAD_ACCENT);
+        else heading.textContent = stripped.slice(0, hs.revealLen);
+      }
     }
     if(body){
       const bs = computeBodyAnimState(anim, elapsed);
@@ -1251,7 +1379,7 @@ function fitCombinedToHeight(ctx, headingText, bodyText, fp, ts0, availW, availH
     headPx = ts0.headPx*scale; bodyPx = ts0.bodyPx*scale;
     headLH = ts0.headLH*scale; bodyLH = ts0.bodyLH*scale; gap = ts0.gap*scale;
     ctx.font = `${fp.headWeight} ${headPx}px "${fp.headName}"`;
-    headLines = wrapLines(ctx, headingText||"", availW);
+    headLines = wrapStyledLines(ctx, headingText||"", availW);
     bodyLines = [];
     if(bodyText){
       ctx.font = `${fp.bodyWeight} ${bodyPx}px "${fp.bodyName}"`;
@@ -1574,6 +1702,17 @@ function renderSidebar(){
     <div class="field">
       <label>Headline</label>
       <textarea id="headingInput" rows="3" style="${TA_STYLE}">${escapeXML(s.heading||"")}</textarea>
+      <div class="empty-hint" style="margin-top:6px;">Select a word (or a few), then tap a style below to emphasize it \u2014 works the same in Story Preview, video, and PNG/SVG exports.</div>
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+        <button type="button" class="btn small" id="headStyleColorBtn" title="Solid accent color">Color</button>
+        <button type="button" class="btn small" id="headStyleOutlineBtn" title="Hollow outline">Outline</button>
+        <button type="button" class="btn small" id="headStyleHighlightBtn" title="Highlighter marker">Highlight</button>
+        <button type="button" class="btn small" id="headStyleClearBtn" title="Remove all emphasis from this headline">Clear</button>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Emphasis color</label>
+        ${colorFieldHTML("headAccentColor", s.headAccentColor||DEFAULT_HEAD_ACCENT)}
+      </div>
     </div>
     <div class="field">
       <label>Body text</label>
@@ -1879,6 +2018,23 @@ function renderSidebar(){
   }
   const headingInput = document.getElementById("headingInput");
   headingInput.oninput = e=>{ s.heading = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
+  const applyHeadingMarkup = delim=>{
+    if(!toggleHeadingMarkup(headingInput, delim)){ showToast("Select a word in the headline first"); return; }
+    s.heading = headingInput.value; renderStage(); commitThumb(state.active);
+  };
+  const headStyleColorBtn = document.getElementById("headStyleColorBtn");
+  if(headStyleColorBtn) headStyleColorBtn.onclick = ()=>applyHeadingMarkup("*");
+  const headStyleOutlineBtn = document.getElementById("headStyleOutlineBtn");
+  if(headStyleOutlineBtn) headStyleOutlineBtn.onclick = ()=>applyHeadingMarkup("_");
+  const headStyleHighlightBtn = document.getElementById("headStyleHighlightBtn");
+  if(headStyleHighlightBtn) headStyleHighlightBtn.onclick = ()=>applyHeadingMarkup("~");
+  const headStyleClearBtn = document.getElementById("headStyleClearBtn");
+  if(headStyleClearBtn) headStyleClearBtn.onclick = ()=>{
+    s.heading = headingPlainText(s.heading||"");
+    headingInput.value = s.heading;
+    renderStage(); commitThumb(state.active);
+  };
+  wireColorField("headAccentColor", v=>{ s.headAccentColor=v; renderStage(); }, ()=>commitThumb(state.active));
   headingInput.onchange = ()=>commitThumb(state.active);
   const bodyInput = document.getElementById("bodyInput");
   bodyInput.oninput = e=>{ s.body = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
@@ -2216,10 +2372,12 @@ function buildSlideDOM(s, idx, editable, W){
   const h = document.createElement("div");
   h.className = "slide-heading"; h.style.color = s.textColor;
   h.style.fontFamily = fp.headFont; h.style.fontWeight = fp.headWeight; h.style.fontSize = ts.headPx+"px"; h.style.lineHeight = "1.08";
-  h.contentEditable = editable ? "true" : "false"; h.spellcheck = false; h.innerText = s.heading;
+  h.contentEditable = editable ? "true" : "false"; h.spellcheck = false;
+  h.innerHTML = headingHTML(s.heading, s.textColor, s.headAccentColor||DEFAULT_HEAD_ACCENT);
   if(editable){
+    h.addEventListener("focus", ()=>{ h.innerText = s.heading||""; });
     h.addEventListener("input", ()=>{ s.heading = h.innerText; fitText(div, frameText, s); scheduleThumbCommit(idx); });
-    h.addEventListener("blur", ()=>{ s.heading = h.innerText; commitThumb(idx); });
+    h.addEventListener("blur", ()=>{ s.heading = h.innerText; h.innerHTML = headingHTML(s.heading, s.textColor, s.headAccentColor||DEFAULT_HEAD_ACCENT); commitThumb(idx); });
   }
   frameText.appendChild(h);
 
@@ -2798,7 +2956,11 @@ async function renderSlideCanvas(s, idx, animMs){
   let drawHeadLines = headLines;
   if(animMs!=null && anim==="typewriter"){
     ctx.font = `${fp.headWeight} ${headPx}px "${fp.headName}"`;
-    drawHeadLines = wrapLines(ctx, (s.heading||"").slice(0, headAnimState.revealLen), availW);
+    const strippedFull = headingPlainText(s.heading||"");
+    if(headAnimState.revealLen < strippedFull.length){
+      const plainLines = wrapLines(ctx, strippedFull.slice(0, headAnimState.revealLen), availW);
+      drawHeadLines = plainLines.map(l=>[{text:l, style:null}]);
+    }
   }
 
   const headBlockH = headLines.length*ts.headLH;
@@ -2826,11 +2988,30 @@ async function renderSlideCanvas(s, idx, animMs){
     ctx.globalAlpha = 1;
     cursorY += kickerLH + kickerGap;
   }
-  ctx.fillStyle = s.textColor;
   ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
+  const headAccentColor = s.headAccentColor || DEFAULT_HEAD_ACCENT;
   ctx.save();
   ctx.globalAlpha = headAnimState.opacity;
-  drawHeadLines.forEach((line,i)=>{ ctx.fillText(line, x + (headAnimState.dx||0), cursorY + headAnimState.dy + i*ts.headLH); });
+  ctx.textAlign = "left";
+  const headXRef = x + (headAnimState.dx||0);
+  drawHeadLines.forEach((line,i)=>{
+    if(!line || line.length===0) return;
+    const lineY = cursorY + headAnimState.dy + i*ts.headLH;
+    const {items} = layoutTokenLine(ctx, line, headXRef, s.align);
+    items.forEach(({tok, x:tx, w})=>{
+      if(tok.style==="accent"){ ctx.fillStyle = headAccentColor; ctx.fillText(tok.text, tx, lineY); }
+      else if(tok.style==="outline"){
+        ctx.strokeStyle = s.textColor; ctx.lineWidth = Math.max(1, ts.headPx*0.045);
+        ctx.strokeText(tok.text, tx, lineY);
+      } else if(tok.style==="highlight"){
+        const padX = w*0.08, asc = ts.headPx*0.78, desc = ts.headPx*0.24;
+        ctx.fillStyle = headAccentColor;
+        ctx.fillRect(tx-padX, lineY-asc*0.03, w+2*padX, asc+desc);
+        ctx.fillStyle = contrastTextColor(headAccentColor);
+        ctx.fillText(tok.text, tx, lineY);
+      } else { ctx.fillStyle = s.textColor; ctx.fillText(tok.text, tx, lineY); }
+    });
+  });
   ctx.restore();
 
   if(hasBody){
@@ -3238,9 +3419,26 @@ function buildSlideSVG(s, idx){
     cursorY += kickerLH + kickerGap;
   }
 
-  body += `<text x="${x}" y="${cursorY + ts.headPx*0.86}" font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
-  headLines.forEach((line,i)=>{ body += `<tspan x="${x}" ${i===0?"":`dy="${ts.headLH}"`}>${escapeXML(line||" ")}</tspan>`; });
-  body += `</text>`;
+  const headAccentColor = s.headAccentColor || DEFAULT_HEAD_ACCENT;
+  mctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
+  let headRects = "", headTspans = "";
+  headLines.forEach((line,i)=>{
+    if(!line || line.length===0) return;
+    const lineY = cursorY + ts.headPx*0.86 + i*ts.headLH;
+    const {items} = layoutTokenLine(mctx, line, x, s.align);
+    items.forEach(({tok, x:tx, w})=>{
+      let fillAttr = ` fill="${s.textColor}"`;
+      if(tok.style==="accent") fillAttr = ` fill="${headAccentColor}"`;
+      else if(tok.style==="outline") fillAttr = ` fill="none" stroke="${s.textColor}" stroke-width="${(ts.headPx*0.045).toFixed(2)}"`;
+      else if(tok.style==="highlight"){
+        const padX = w*0.08, asc = ts.headPx*0.78, desc = ts.headPx*0.24;
+        headRects += `<rect x="${(tx-padX).toFixed(1)}" y="${(lineY-asc).toFixed(1)}" width="${(w+2*padX).toFixed(1)}" height="${(asc+desc).toFixed(1)}" rx="${(ts.headPx*0.08).toFixed(1)}" fill="${headAccentColor}"/>`;
+        fillAttr = ` fill="${contrastTextColor(headAccentColor)}"`;
+      }
+      headTspans += `<tspan x="${tx.toFixed(1)}" y="${lineY.toFixed(1)}"${fillAttr}>${escapeXML(tok.text)}</tspan>`;
+    });
+  });
+  body += headRects + `<text font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" text-anchor="start">${headTspans}</text>`;
 
   if(hasBody){
     const bodyStartY = cursorY + headBlockH + ts.gap;
