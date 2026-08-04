@@ -801,6 +801,23 @@ function layoutTokenLine(ctx, tokens, xRef, align){
   });
   return {lineW, items};
 }
+/* Merges consecutive same-style tokens from a layoutTokenLine result into runs. A headline
+   with no emphasis markup collapses to ONE run per line (identical to how SVG text worked
+   before the per-word emphasis feature existed); only actual style transitions (into/out of
+   an accent/outline/highlight word) get their own positioned tspan. This matters because SVG
+   consumers like Figma's import don't reliably honor per-tspan x for many tspans on one line
+   \u2014 fewer, larger runs means far less can go wrong, and plain runs flow as real text with
+   real spaces instead of relying on exact width math against a font the viewer may not have. */
+function coalesceRuns(items){
+  const runs = [];
+  items.forEach(({tok,x,w})=>{
+    const style = tok.style||null;
+    const last = runs[runs.length-1];
+    if(last && last.style===style){ last.text += " "+tok.text; last.end = x+w; }
+    else runs.push({style, text:tok.text, x, end:x+w});
+  });
+  return runs.map(r=>({style:r.style, text:r.text, x:r.x, w:r.end-r.x}));
+}
 /* DOM rendering: turns the raw markup string into escaped HTML with styled <span>s. Only used
    when the heading div ISN'T being actively typed into (see focus/blur handling in buildSlideDOM)
    \u2014 while focused it shows the raw markup so it stays directly editable as plain text. */
@@ -2848,6 +2865,37 @@ function renderAll(){
 window.addEventListener("resize", ()=>{ renderStage(); });
 
 /* ============================= EXPORT: CANVAS (PNG) ============================= */
+/* ============================= EXPORT: SVG FONT EMBEDDING =============================
+   Figma, Illustrator, and most SVG viewers don't have Google Fonts installed locally \u2014
+   they'll silently substitute a fallback font for the font-family we specify. Since headline
+   words are positioned with exact absolute x coordinates (needed for per-word colors/outline/
+   highlight), a substituted font with different letter widths makes words overlap or cram
+   together. Fetching the real font file and embedding it as base64 inside the SVG's own
+   <style> means any viewer renders with the exact font the positions were computed for. */
+const _fontDataUrlCache = new Map();
+async function fetchGoogleFontDataURL(family, weight){
+  const cacheKey = family+"|"+weight;
+  if(_fontDataUrlCache.has(cacheKey)) return _fontDataUrlCache.get(cacheKey);
+  let result = null;
+  try{
+    const cssUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family).replace(/%20/g,"+")}:wght@${weight}&display=swap`;
+    const cssRes = await fetch(cssUrl);
+    const cssText = await cssRes.text();
+    const match = cssText.match(/src:\s*url\(([^)]+\.woff2)\)/);
+    if(match){
+      const fontRes = await fetch(match[1]);
+      const buf = await fontRes.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      const chunk = 0x8000;
+      for(let i=0;i<bytes.length;i+=chunk) binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+      result = `data:font/woff2;base64,${btoa(binary)}`;
+    }
+  }catch(e){ result = null; }
+  _fontDataUrlCache.set(cacheKey, result);
+  return result;
+}
+
 async function ensureFontsReady(){
   const fp = {
     headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
@@ -3348,7 +3396,8 @@ function overlaySVG(defs, body, box, dir, opacity, gid, clipId, hex){
   return {defs, body};
 }
 
-function buildSlideSVG(s, idx){
+async function buildSlideSVG(s, idx){
+  await ensureFontsReady();
   const asp = ASPECTS[state.aspect];
   const fp = {
     headFont: fontFamilyCSS(state.headFont), headWeight: state.headWeight, headName: state.headFont,
@@ -3421,22 +3470,29 @@ function buildSlideSVG(s, idx){
 
   const headAccentColor = s.headAccentColor || DEFAULT_HEAD_ACCENT;
   mctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
+  const headSpaceW = mctx.measureText(" ").width;
   let headRects = "", headTspans = "";
   headLines.forEach((line,i)=>{
     if(!line || line.length===0) return;
     const lineTop = cursorY + i*ts.headLH;
     const lineY = lineTop + ts.headPx*0.86;
     const {items} = layoutTokenLine(mctx, line, x, s.align);
-    items.forEach(({tok, x:tx, w})=>{
+    const runs = coalesceRuns(items);
+    runs.forEach((run, ri)=>{
       let fillAttr = ` fill="${s.textColor}"`;
-      if(tok.style==="accent") fillAttr = ` fill="${headAccentColor}"`;
-      else if(tok.style==="outline") fillAttr = ` fill="none" stroke="${s.textColor}" stroke-width="${(ts.headPx*0.045).toFixed(2)}"`;
-      else if(tok.style==="highlight"){
-        const padX = w*0.08;
-        headRects += `<rect x="${(tx-padX).toFixed(1)}" y="${(lineTop+ts.headLH*0.06).toFixed(1)}" width="${(w+2*padX).toFixed(1)}" height="${(ts.headLH*0.82).toFixed(1)}" rx="${(ts.headPx*0.08).toFixed(1)}" fill="${headAccentColor}"/>`;
+      if(run.style==="accent") fillAttr = ` fill="${headAccentColor}"`;
+      else if(run.style==="outline") fillAttr = ` fill="none" stroke="${s.textColor}" stroke-width="${(ts.headPx*0.045).toFixed(2)}"`;
+      else if(run.style==="highlight"){
+        const padX = ts.headPx*0.06;
+        headRects += `<rect x="${(run.x-padX).toFixed(1)}" y="${(lineTop+ts.headLH*0.06).toFixed(1)}" width="${(run.w+2*padX).toFixed(1)}" height="${(ts.headLH*0.82).toFixed(1)}" rx="${(ts.headPx*0.08).toFixed(1)}" fill="${headAccentColor}"/>`;
         fillAttr = ` fill="${contrastTextColor(headAccentColor)}"`;
       }
-      headTspans += `<tspan x="${tx.toFixed(1)}" y="${lineY.toFixed(1)}"${fillAttr}>${escapeXML(tok.text)}</tspan>`;
+      // Real space character before every run but the first on a line \u2014 same defensive
+      // reasoning as above: if a viewer ignores this tspan's own x, the raw text content
+      // still reads with correct spacing instead of gluing onto the previous run.
+      const rx = ri===0 ? run.x : run.x - headSpaceW;
+      const rtext = ri===0 ? escapeXML(run.text) : " "+escapeXML(run.text);
+      headTspans += `<tspan x="${rx.toFixed(1)}" y="${lineY.toFixed(1)}" xml:space="preserve"${fillAttr}>${rtext}</tspan>`;
     });
   });
   body += headRects + `<text font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" text-anchor="start">${headTspans}</text>`;
@@ -3532,16 +3588,28 @@ function buildSlideSVG(s, idx){
     body += `<image href="${s.logoImage}" x="${lp.x.toFixed(1)}" y="${lp.y.toFixed(1)}" width="${lw.toFixed(1)}" height="${lh.toFixed(1)}"/>`;
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${body}</svg>`;
+  let fontFaceCSS = "";
+  try{
+    const [headDataUrl, bodyDataUrl] = await Promise.all([
+      fetchGoogleFontDataURL(fp.headName, state.headWeight),
+      fetchGoogleFontDataURL(fp.bodyName, state.bodyWeight),
+    ]);
+    if(headDataUrl) fontFaceCSS += `@font-face{font-family:"${fp.headName}";font-weight:${state.headWeight};src:url(${headDataUrl}) format("woff2");}`;
+    if(bodyDataUrl && fp.bodyName!==fp.headName) fontFaceCSS += `@font-face{font-family:"${fp.bodyName}";font-weight:${state.bodyWeight};src:url(${bodyDataUrl}) format("woff2");}`;
+  }catch(e){}
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${fontFaceCSS?`<style>${fontFaceCSS}</style>`:""}${defs}</defs>${body}</svg>`;
 }
 
-function exportCurrentSVG(){
-  const svg = buildSlideSVG(state.slides[state.active], state.active);
+async function exportCurrentSVG(){
+  const svg = await buildSlideSVG(state.slides[state.active], state.active);
   saveBlob(new Blob([svg], {type:"image/svg+xml"}), `slide-${state.active+1}.svg`);
 }
 async function exportAllSVG(){
   const zip = new JSZip();
-  state.slides.forEach((s,i)=>{ zip.file(`slide-${i+1}.svg`, buildSlideSVG(s,i)); });
+  for(let i=0;i<state.slides.length;i++){
+    zip.file(`slide-${i+1}.svg`, await buildSlideSVG(state.slides[i], i));
+  }
   const content = await zip.generateAsync({type:"blob"});
   saveBlob(content, "carousel-svg.zip");
 }
