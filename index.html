@@ -1397,14 +1397,23 @@ function fitCombinedToHeight(ctx, headingText, bodyText, fp, ts0, availW, availH
     headLH = ts0.headLH*scale; bodyLH = ts0.bodyLH*scale; gap = ts0.gap*scale;
     ctx.font = `${fp.headWeight} ${headPx}px "${fp.headName}"`;
     headLines = wrapStyledLines(ctx, headingText||"", availW);
+    let maxHeadLineW = 0;
+    headLines.forEach(line=>{ if(line && line.length) maxHeadLineW = Math.max(maxHeadLineW, measureTokenLineWidth(ctx, line)); });
     bodyLines = [];
+    let maxBodyLineW = 0;
     if(bodyText){
       ctx.font = `${fp.bodyWeight} ${bodyPx}px "${fp.bodyName}"`;
       bodyLines = wrapLines(ctx, bodyText, availW);
+      bodyLines.forEach(line=>{ if(line) maxBodyLineW = Math.max(maxBodyLineW, ctx.measureText(line).width); });
     }
     const headBlockH = headLines.length*headLH, bodyBlockH = bodyLines.length*bodyLH;
     totalH = (hasKicker? kickerLH+kickerGap : 0) + headBlockH + (bodyLines.length? gap+bodyBlockH : 0);
-    if(totalH <= availH || scale<=0.3) break;
+    // A single very long word can force a "line" that's still wider than availW even
+    // after wrapping \u2014 checking only totalH<=availH misses this entirely whenever
+    // there's plenty of vertical room to spare (tall narrow columns: left/right/editorial),
+    // so the font never shrinks even though it's visibly too big for that column's width.
+    const widthOk = maxHeadLineW <= availW+0.5 && maxBodyLineW <= availW+0.5;
+    if((totalH <= availH && widthOk) || scale<=0.3) break;
     scale -= 0.03;
   }
   return {headLines, bodyLines, headPx, bodyPx, headLH, bodyLH, gap, totalH};
