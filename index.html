@@ -105,7 +105,7 @@
   }
   .stage.drag-over{ background:rgba(255,173,42,.08); }
   .stage.drag-over::after{
-    content:"Drop image to add it to this slide"; position:absolute; inset:14px; border:2px dashed var(--accent-ui);
+    content:"Drop 1 photo for this slide, or several to fill the whole carousel"; position:absolute; inset:14px; border:2px dashed var(--accent-ui);
     border-radius:12px; display:flex; align-items:center; justify-content:center; color:var(--accent-ui);
     font-size:14px; font-weight:600; pointer-events:none; background:rgba(44,44,44,.55);
   }
@@ -1535,6 +1535,49 @@ function applyImageFileToActiveSlide(file){
   };
   reader.readAsDataURL(file);
 }
+const MAX_SLIDES = 12;
+function readFileAsDataURL(file){
+  return new Promise((res,rej)=>{
+    const reader = new FileReader();
+    reader.onload = ev=>res(ev.target.result);
+    reader.onerror = ()=>rej(new Error("Couldn't read "+file.name));
+    reader.readAsDataURL(file);
+  });
+}
+/* Bulk photo upload: the person picks (or drags) several photos at once and each one lands on
+   its own slide, in the order the files were selected \u2014 no need to add slides one at a time
+   and upload into each individually. Fills slide 1, 2, 3... growing the deck (cloning the last
+   slide's colors/layout/logo/signature so new slides match the deck's look, same as the "+"
+   button in the rail) whenever there are more photos than existing slides, up to the app's
+   12-slide cap. If there are FEWER photos than slides, only the first N slides get a photo;
+   anything after that is left completely untouched (e.g. a closing CTA slide with no photo). */
+async function applyBulkImagesToSlides(fileList){
+  const files = Array.from(fileList || []).filter(f=>f && f.type && f.type.startsWith("image/"));
+  if(!files.length){ showToast("No images found in that selection"); return; }
+
+  while(state.slides.length < files.length && state.slides.length < MAX_SLIDES){
+    const clone = cloneSlide(state.slides[state.slides.length-1]);
+    clone.heading = ""; clone.body = ""; clone.image = null; clone.imageEl = null;
+    state.slides.push(clone);
+  }
+  const usable = Math.min(files.length, state.slides.length);
+  if(files.length > usable){
+    showToast(`This carousel maxes out at ${MAX_SLIDES} slides \u2014 using the first ${usable} photos`);
+  }
+
+  for(let i=0;i<usable;i++){
+    let dataUrl;
+    try{ dataUrl = await readFileAsDataURL(files[i]); }
+    catch(e){ continue; } // skip a file that failed to read rather than aborting the whole batch
+    const s = state.slides[i];
+    s.image = dataUrl; s.imageEl = await loadImageEl(dataUrl);
+    s.imageScale = 1; s.imageOffsetX = 0.5; s.imageOffsetY = 0.5;
+  }
+  state.active = 0;
+  renderAll();
+  showToast(`Added ${usable} photo${usable===1?"":"s"} to your slides`);
+}
+
 function applyLogoFileToActiveSlide(file){
   if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
   const s = state.slides[state.active];
@@ -1891,7 +1934,13 @@ function renderSidebar(){
     `, "\u270D\uFE0F")}
     ${sec("image", "Photo", `
     <div class="field">
-      <label>Your photo</label>
+      <label>Add multiple photos</label>
+      <div class="empty-hint" style="margin-top:-2px;">Upload several photos at once \u2014 they fill your slides in order, adding new slides if you have more photos than slides.</div>
+      <button class="btn small full" id="bulkUploadBtn">\u{1F4F8} Upload multiple photos</button>
+      <input type="file" accept="image/*" multiple id="bulkFileInput" style="display:none">
+    </div>
+    <div class="field" style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px;">
+      <label>This slide's photo</label>
       <div class="imgctrl">
         <button class="btn small" id="uploadBtn">${s.image?"Replace":"Upload"}</button>
         ${s.image?'<button class="btn small" id="removeImgBtn">Remove</button>':""}
@@ -2232,6 +2281,15 @@ function renderSidebar(){
 
   wireColorField("bgColor", v=>{ s.bgColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
   wireColorField("textColor", v=>{ s.textColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
+
+  const bulkUploadBtn = document.getElementById("bulkUploadBtn");
+  if(bulkUploadBtn) bulkUploadBtn.onclick = ()=>document.getElementById("bulkFileInput").click();
+  const bulkFileInput = document.getElementById("bulkFileInput");
+  if(bulkFileInput) bulkFileInput.onchange = e=>{
+    const files = e.target.files;
+    if(files && files.length) applyBulkImagesToSlides(files);
+    e.target.value = "";
+  };
 
   document.getElementById("uploadBtn").onclick = ()=>document.getElementById("fileInput").click();
   document.getElementById("fileInput").onchange = e=>{
@@ -3798,8 +3856,10 @@ stageEl.addEventListener("dragenter", (e)=>{ e.preventDefault(); dragDepth++; st
 stageEl.addEventListener("dragleave", ()=>{ dragDepth = Math.max(0, dragDepth-1); if(dragDepth===0) stageEl.classList.remove("drag-over"); });
 stageEl.addEventListener("drop", (e)=>{
   e.preventDefault(); dragDepth = 0; stageEl.classList.remove("drag-over");
-  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if(file) applyImageFileToActiveSlide(file);
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if(!files || !files.length) return;
+  if(files.length > 1) applyBulkImagesToSlides(files);
+  else applyImageFileToActiveSlide(files[0]);
 });
 
 // On load, offer to resume an autosaved session (non-blocking: the default/last-edited
