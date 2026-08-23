@@ -30,6 +30,22 @@
     flex-shrink:0;
   }
   .brand{display:flex; align-items:center; gap:10px; font-family:"Space Grotesk",sans-serif; font-weight:700; font-size:17px;}
+  .mode-toggle{
+    display:flex; align-items:center; gap:2px; padding:3px; border-radius:10px;
+    background:var(--surface); border:1px solid var(--line); margin-left:14px; flex-shrink:0;
+  }
+  .mode-toggle button{
+    font-family:"Inter",sans-serif; font-size:12.5px; font-weight:700; border:none; border-radius:7px;
+    background:none; color:var(--muted); padding:6px 12px; cursor:pointer; display:flex; align-items:center; gap:6px;
+    transition: background .12s ease, color .12s ease;
+  }
+  .mode-toggle button.active{ background:var(--accent-ui); color:var(--accent-ui-ink); }
+  .mode-toggle button:not(.active):hover{ color:var(--ink); }
+  .mode-switch-hint{
+    margin:18px 2px 4px; padding:12px; border-radius:10px; border:1px dashed var(--line-strong);
+    background:var(--surface); font-family:"Inter",sans-serif;
+  }
+  .mode-switch-hint p{ margin:0 0 8px; font-size:12.5px; color:var(--muted); line-height:1.5; }
   .brand .dot{width:9px; height:9px; border-radius:50%; background:var(--accent-ui); flex-shrink:0;}
   .topbar-actions{display:flex; align-items:center; gap:10px;}
   .btn{
@@ -282,6 +298,9 @@
     .btn{ padding:8px 10px; font-size:12.5px; }
     .btn-full{display:none;}
     .btn-short{display:inline;}
+    .mode-toggle{ margin-left:4px; padding:2px; }
+    .mode-toggle button{ padding:5px 7px; }
+    .mode-toggle .mode-label-full{ display:none; }
     .sidebar{
       position:fixed; top:0; left:0; height:100%; width:88%; max-width:380px;
       transform:translateX(-100%); transition:transform .22s ease; z-index:210;
@@ -377,6 +396,10 @@
 <div class="topbar">
   <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open editing panel">&#9776;</button>
   <div class="brand"><span class="dot"></span>Carousel Studio</div>
+  <div class="mode-toggle" id="modeToggle" role="tablist" aria-label="Editing mode">
+    <button type="button" data-mode="fast" role="tab" title="Quick, guided setup with just the essentials">&#9889; <span class="mode-label-full">Fast</span></button>
+    <button type="button" data-mode="slow" role="tab" title="Full manual control: drag photos, filters, texture layers, and more">&#127859; <span class="mode-label-full">Slow Cook</span></button>
+  </div>
   <div class="topbar-actions">
     <button class="btn small" id="undoBtn" onclick="undo()" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" disabled>&#8630;</button>
     <button class="btn small" id="redoBtn" onclick="redo()" title="Redo (Ctrl/Cmd+Shift+Z)" aria-label="Redo" disabled>&#8631;</button>
@@ -627,6 +650,30 @@ const state = {
   activeTemplate: null,
   slides: defaultSlides(), active: 0,
 };
+
+/* ============================= EDITING MODE (Fast vs Slow Cook) ============================= */
+/* Deliberately kept OUTSIDE `state`: this is a view/UI preference (which sidebar controls are
+   shown), not part of the deck's content, so it must never enter snapshotState()/undo history
+   or get saved into/loaded from a project .json \u2014 opening someone else's saved project
+   shouldn't silently flip your own editing mode. Persisted separately in localStorage purely
+   as a "remember how I like to work" convenience.
+   Fast = guided, few knobs (upload + zoom, basic layout/text, templates) \u2014 matches the
+   "paste a link, get a carousel" simplicity of tools built for non-designers. Slow Cook = every
+   control this app has: drag-to-reposition, photo filter, texture layer, logo, signature, fine
+   sizing. Sections not in FAST_MODE_SECTIONS are simply skipped when building the sidebar HTML
+   in Fast mode; nothing about the underlying slide data changes when switching modes, so
+   toggling back and forth never loses work someone already did in Slow Cook. */
+const UI_MODE_KEY = "carousel-studio-uimode";
+let uiMode = "fast";
+try{ const saved = localStorage.getItem(UI_MODE_KEY); if(saved==="fast"||saved==="slow") uiMode = saved; }catch(e){}
+const FAST_MODE_SECTIONS = new Set(["deck","templates","layout","content","image"]);
+function setUIMode(m){
+  if(m!=="fast" && m!=="slow") return;
+  uiMode = m;
+  try{ localStorage.setItem(UI_MODE_KEY, m); }catch(e){}
+  document.querySelectorAll("#modeToggle button").forEach(b=>b.classList.toggle("active", b.dataset.mode===m));
+  renderSidebar();
+}
 
 let railThumbEls = [];
 let thumbDebounceTimer = null;
@@ -1630,6 +1677,7 @@ const sidebarOpenState = {
 // glance which optional effects (filter, texture, logo, signature) are currently turned on
 // for THIS slide without having to open every section to check.
 function sec(id, title, innerHtml, icon, active){
+  if(uiMode==="fast" && !FAST_MODE_SECTIONS.has(id)) return "";
   const open = !!sidebarOpenState[id];
   return `<div class="section-group">
     <button type="button" class="section-toggle" data-sec="${id}" aria-expanded="${open}">
@@ -1638,6 +1686,11 @@ function sec(id, title, innerHtml, icon, active){
     <div class="section-body" id="secbody-${id}" style="${open?"":"display:none;"}">${innerHtml}</div>
   </div>`;
 }
+/* Wraps a chunk of advanced markup so it only appears in Slow Cook \u2014 used INSIDE sections
+   that stay visible in both modes (Photo, Text) but whose fine-tuning controls (corner
+   rounding, per-slide px overrides, animation, emphasis styling...) would just be noise for
+   someone who wants the guided Fast path. */
+function slowOnly(html){ return uiMode==="slow" ? html : ""; }
 function wireSectionToggles(){
   document.querySelectorAll(".section-toggle").forEach(btn=>{
     btn.onclick = ()=>{
@@ -1735,7 +1788,7 @@ function renderSidebar(){
     </div>
     `, "\u{1F4D0}")}
     ${sec("content", "Text", `
-    <div class="empty-hint" style="margin-top:-2px;">Fonts apply to the whole deck. Everything else below is just for this slide.</div>
+    ${slowOnly(`<div class="empty-hint" style="margin-top:-2px;">Fonts apply to the whole deck. Everything else below is just for this slide.</div>
     <div class="field">
       <label>Heading style</label>
       <select id="selHeadCategory">${Object.entries(FONT_CATEGORIES).map(([k,v])=>`<option value="${k}" ${k===state.headCategory?"selected":""}>${v}</option>`).join("")}</select>
@@ -1753,7 +1806,8 @@ function renderSidebar(){
       <label>Body font</label>
       <select id="selBodyFont">${fontsInCategory(state.bodyCategory).map(f=>`<option value="${f.name}" ${f.name===state.bodyFont?"selected":""}>${f.name}</option>`).join("")}</select>
     </div>
-    ${rangeField("bodyWeightRange", "Body weight", 0, findFont(state.bodyFont).weights.length-1, 1, findFont(state.bodyFont).weights.indexOf(state.bodyWeight), state.bodyWeight)}
+    ${rangeField("bodyWeightRange", "Body weight", 0, findFont(state.bodyFont).weights.length-1, 1, findFont(state.bodyFont).weights.indexOf(state.bodyWeight), state.bodyWeight)}`)}
+    ${uiMode==="fast"?`<div class="empty-hint" style="margin-top:-2px;">Pick a Template above for fonts \u2014 here you just write the words.</div>`:``}
     <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>Kicker / label <span style="font-weight:400;color:var(--muted)">(optional, sits above the headline)</span></label>
       <input type="text" id="kickerInput" placeholder="e.g. Fitfeed" value="${escAttr(s.kicker)}" maxlength="30">
@@ -1761,6 +1815,7 @@ function renderSidebar(){
     <div class="field">
       <label>Headline</label>
       <textarea id="headingInput" rows="3" style="${TA_STYLE}">${escapeXML(s.heading||"")}</textarea>
+      ${slowOnly(`
       <div class="empty-hint" style="margin-top:6px;">Select a word (or a few), then tap a style below to emphasize it \u2014 works the same in Story Preview, video, and PNG/SVG exports.</div>
       <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
         <button type="button" class="btn small" id="headStyleColorBtn" title="Solid accent color">Color</button>
@@ -1771,12 +1826,13 @@ function renderSidebar(){
       <div class="field" style="margin-top:8px;">
         <label>Emphasis color</label>
         ${colorFieldHTML("headAccentColor", s.headAccentColor||DEFAULT_HEAD_ACCENT)}
-      </div>
+      </div>`)}
     </div>
     <div class="field">
       <label>Body text</label>
       <textarea id="bodyInput" rows="3" style="${TA_STYLE}">${escapeXML(s.body||"")}</textarea>
     </div>
+    ${slowOnly(`
     <div class="field">
       <label>Animation</label>
       ${segmented("segTextAnim", Object.keys(TEXT_ANIMS).map(k=>({k, label:TEXT_ANIMS[k].label, active:(s.textAnim||"none")===k})))}
@@ -1792,7 +1848,7 @@ function renderSidebar(){
         <input type="number" id="bodySizeInput" placeholder="${Math.round(ASPECTS[state.aspect].w*0.036*SIZE_MULT[state.size])}" min="6" max="200" step="1" value="${s.bodySizePx!=null?Math.round(s.bodySizePx):""}">
       </div>
     </div>
-    <div class="empty-hint">Leave blank to use the deck's S/M/L size. Type a number to set this slide's exact size in pixels \u2014 it'll still auto-shrink if the text overflows its box.</div>
+    <div class="empty-hint">Leave blank to use the deck's S/M/L size. Type a number to set this slide's exact size in pixels \u2014 it'll still auto-shrink if the text overflows its box.</div>`)}
     <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>Text position</label>
       ${segmented("segPos", [
@@ -1808,6 +1864,7 @@ function renderSidebar(){
         {k:"center", label:"Center", active:s.align==="center"},
       ])}
     </div>
+    ${slowOnly(`
     <div class="field toggle-row" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label style="margin:0;">Detach support text from headline</label>
       <label class="switch"><input type="checkbox" id="toggleBodyDetach" ${s.bodyDetached?"checked":""}><span class="slider-tg"></span></label>
@@ -1829,8 +1886,8 @@ function renderSidebar(){
         {k:"center", label:"Center", active:(s.bodyAlign||s.align)==="center"},
       ])}
     </div>
-    `:``}
-    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too. Drag the dot at the corner of the text box on the canvas to resize it.</div>
+    `:``}`)}
+    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too.${uiMode==="slow"?" Drag the dot at the corner of the text box on the canvas to resize it.":""}</div>
     `, "\u270D\uFE0F")}
     ${sec("image", "Photo", `
     <div class="field">
@@ -1845,6 +1902,7 @@ function renderSidebar(){
     <div class="empty-hint" style="margin-top:-2px;">Drag the photo directly on the canvas to reposition it.</div>
     ${rangeField("zoomRange", "Zoom", 100, 300, 2, Math.round((s.imageScale||1)*100), Math.round((s.imageScale||1)*100)+"%")}
     <div class="field"><button class="btn small full" id="resetCropBtn">Reset position</button></div>
+    ${slowOnly(`
     ${rangeField("imageRadiusRange", "Rounded corners", 0, 8, 0.2, ((s.imageRadius||0)*100).toFixed(1), Math.round((s.imageRadius||0)*100))}
     ${rangeField("imageInsetRange", "Photo size", 80, 100, 0.5, (100-(s.imageInset||0)*100).toFixed(1), Math.round(100-(s.imageInset||0)*100)+"%")}
     <div class="empty-hint">100% keeps the photo filling its spot. Lower it to shrink the photo inward so rounded corners actually show.</div>
@@ -1859,8 +1917,8 @@ function renderSidebar(){
       </div>
       <div class="empty-hint" style="margin-top:6px;">Tap a swatch to use it as this slide's background \u2014 text color adjusts automatically so it stays readable.</div>
       ` : `<div class="empty-hint">Pull a few dominant colors out of the photo, so the slide's background matches it.</div>`}
-    </div>
-    `:`<div class="empty-hint">Upload a photo to unlock zoom, repositioning, a photo filter, and a texture layer.</div>`}
+    </div>`)}
+    `:`<div class="empty-hint">Upload a photo to unlock zoom and repositioning.${uiMode==="slow"?" Switch sections below for a photo filter and texture layer.":""}</div>`}
     `, "\u{1F5BC}\uFE0F")}
     ${sec("overlay", "Photo filter", `
     ${s.image ? (s.layout==="full" ? `
@@ -1984,10 +2042,20 @@ function renderSidebar(){
       <div class="colorfield"><input type="color" id="textColor" value="${s.textColor}"><input type="text" class="hexinput" id="textColorHex" value="${s.textColor}" maxlength="7" spellcheck="false" autocomplete="off"></div>
     </div>
     `, "\u{1F308}")}
+    ${uiMode==="fast"?`
+    <div class="mode-switch-hint">
+      <p>Want to drag your photo layers, add a filter or texture, place a logo, or fine-tune sizes? That's all in Slow Cook.</p>
+      <button class="btn small full" id="switchToSlowBtn">&#127859; Switch to Slow Cook</button>
+    </div>
+    `:``}
   `;
+
+  const switchToSlowBtn = document.getElementById("switchToSlowBtn");
+  if(switchToSlowBtn) switchToSlowBtn.onclick = ()=>setUIMode("slow");
 
   wireSectionToggles();
   document.getElementById("selAspect").onchange = e=>{ state.aspect=e.target.value; renderAll(); };
+  if(uiMode==="slow"){
   document.getElementById("selHeadCategory").onchange = e=>{
     state.headCategory=e.target.value;
     const opts = fontsInCategory(state.headCategory);
@@ -2034,6 +2102,7 @@ function renderSidebar(){
     renderStage();
   };
   bodyWeightRange.onchange = ()=>commitThumb(state.active);
+  }
   wireColorField("badgeTextColor", v=>{ state.badgeTextColor=v; renderStage(); }, ()=>renderRail());
   document.getElementById("slideDec").onclick = ()=>{ if(state.slides.length>1){ state.slides.splice(state.active,1); state.active=Math.max(0,state.active-1); renderAll(); } };
   document.getElementById("slideInc").onclick = ()=>{ if(state.slides.length<12){ const clone=cloneSlide(state.slides[state.active]); clone.heading="New headline"; clone.body="Body text goes here."; state.slides.splice(state.active+1,0,clone); state.active++; renderAll(); } };
@@ -2041,7 +2110,8 @@ function renderSidebar(){
 
   wireColorField("accentColor", v=>{ state.accent=v; renderStage(); }, ()=>renderRail());
 
-  document.getElementById("togglePageNum").onchange = e=>{ state.showPageNum=e.target.checked; renderAll(); };
+  const togglePageNum = document.getElementById("togglePageNum");
+  if(togglePageNum) togglePageNum.onchange = e=>{ state.showPageNum=e.target.checked; renderAll(); };
   document.querySelectorAll("#segBadge button").forEach(b=>b.onclick=()=>{ state.badgePos=b.dataset.k; renderAll(); });
   const toggleSwipeHint = document.getElementById("toggleSwipeHint");
   if(toggleSwipeHint) toggleSwipeHint.onchange = e=>{ state.showSwipeHint=e.target.checked; renderAll(); };
@@ -3671,6 +3741,10 @@ function closeSidebarMobile(){
   document.getElementById("sidebarCloseBtn").classList.remove("open");
 }
 document.getElementById("mobileMenuBtn").onclick = openSidebarMobile;
+document.querySelectorAll("#modeToggle button").forEach(btn=>{
+  btn.classList.toggle("active", btn.dataset.mode===uiMode);
+  btn.onclick = ()=>setUIMode(btn.dataset.mode);
+});
 document.getElementById("sidebarBackdrop").onclick = closeSidebarMobile;
 document.getElementById("sidebarCloseBtn").onclick = closeSidebarMobile;
 window.addEventListener("orientationchange", ()=>setTimeout(renderStage, 200));
