@@ -201,6 +201,7 @@
   .sz-safe-outline{ position:absolute; border:2px dashed rgba(255,255,255,.9); border-radius:6px; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
   .thumb-frame .slide{box-shadow:none; border-radius:0;}
   .frame-image{position:absolute; overflow:hidden;}
+  .frame-image.cutout-layer{ pointer-events:none; }
   .frame-image img{position:absolute; max-width:none; -webkit-user-drag:none; user-select:none;}
   .frame-image.editable img{cursor:grab; touch-action:none;}
   .frame-image.editable img.dragging{cursor:grabbing;}
@@ -382,6 +383,28 @@
   }
   .palette-swatch:hover{ border-color:var(--line-strong); transform:scale(1.08); }
   .palette-swatch:active{ transform:scale(.96); }
+  .bulk-photo-dropzone{
+    min-height:120px; border:1.5px dashed var(--line-strong); border-radius:10px; padding:12px;
+    display:flex; align-items:center; justify-content:center; transition:background .12s ease, border-color .12s ease;
+  }
+  .bulk-photo-dropzone.drag-over{ background:rgba(255,173,42,.08); border-color:var(--accent-ui); }
+  .bulk-photo-empty{ font-family:"Inter",sans-serif; font-size:12.5px; color:var(--muted); text-align:center; padding:14px; }
+  .bulk-photo-grid{ display:flex; flex-wrap:wrap; gap:8px; width:100%; }
+  .bulk-photo-thumb{
+    position:relative; width:68px; height:68px; border-radius:8px; overflow:hidden;
+    background:var(--panel); border:1px solid var(--line); flex-shrink:0;
+  }
+  .bulk-photo-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .bulk-photo-num{
+    position:absolute; left:3px; bottom:3px; font:700 10px/1 "Inter",sans-serif; color:#fff;
+    background:rgba(15,15,15,.75); padding:2px 5px; border-radius:5px;
+  }
+  .bulk-photo-thumb button{
+    position:absolute; top:2px; right:2px; width:18px; height:18px; border-radius:5px; border:none;
+    background:rgba(15,15,15,.75); color:#fff; font-size:12px; line-height:1; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .bulk-photo-thumb button:hover{ background:rgba(15,15,15,.95); }
   .story-modal{
     display:none; position:fixed; inset:0; z-index:300; background:#000;
     align-items:center; justify-content:center;
@@ -476,6 +499,23 @@
     <div class="import-modal-actions">
       <button class="btn small" id="importModalCancel">Cancelar</button>
       <button class="btn small primary" id="importModalConfirm">Importar</button>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="bulkPhotoModalBackdrop"></div>
+  <div class="import-modal" id="bulkPhotoModal" role="dialog" aria-modal="true" aria-labelledby="bulkPhotoModalTitle">
+    <h3 id="bulkPhotoModalTitle">Add multiple photos</h3>
+    <p class="import-modal-hint">Paste images one at a time (Ctrl/Cmd+V) or browse your computer below. They'll fill your slides in the order they land here \u2014 review or remove any before applying.</p>
+    <div class="bulk-photo-dropzone" id="bulkPhotoDropzone">
+      <div class="bulk-photo-grid" id="bulkPhotoGrid"></div>
+      <div class="bulk-photo-empty" id="bulkPhotoEmpty">No photos yet &mdash; paste (Ctrl/Cmd+V) or browse to add some.</div>
+    </div>
+    <input type="file" accept="image/*" multiple id="bulkPhotoFileInput" style="display:none">
+    <div class="import-modal-actions" style="justify-content:space-between;">
+      <button class="btn small" id="bulkPhotoBrowseBtn">Browse computer&hellip;</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn small" id="bulkPhotoModalCancel">Cancel</button>
+        <button class="btn small primary" id="bulkPhotoModalApply" disabled>Apply to slides</button>
+      </div>
     </div>
   </div>
   <div class="modal-backdrop" id="aiPromptModalBackdrop"></div>
@@ -640,6 +680,11 @@ function blankSlideDefaults(){
     layer2Image:null, layer2ImageEl:null,
     layer2Scale:1, layer2OffsetX:0.5, layer2OffsetY:0.5,
     layer2Opacity:60, layer2Blend:"normal",
+    // Cutout: a background-removed version of the subject, rendered IN FRONT of the text for
+    // a "subject in front of text" effect. Positioned/scaled independently but within the same
+    // box as the base photo, same pattern as layer2.
+    cutoutImage:null, cutoutImageEl:null,
+    cutoutScale:1, cutoutOffsetX:0.5, cutoutOffsetY:0.5, cutoutOpacity:100,
     dragLayer:"layer1",
   };
 }
@@ -1690,6 +1735,68 @@ async function applyBulkImagesToSlides(fileList){
   showToast(`Added ${usable} photo${usable===1?"":"s"} to your slides`);
 }
 
+/* ====================== BULK PHOTO STAGING MODAL ======================
+   applyBulkImagesToSlides() above is the "apply" step; this section is the staging area in
+   front of it. The person can paste an image, see it land in the grid, paste another, browse
+   for a few more, remove one they don't want, and only when they're happy click Apply \u2014
+   instead of every paste immediately committing to a slide. Files are held as File objects
+   (not yet read into slides) with an object URL purely for the thumbnail preview; nothing
+   touches `state`/undo history until Apply is pressed, so canceling the modal is a true no-op. */
+let bulkPhotoQueue = []; // [{file, url}]
+function openBulkPhotoModal(){
+  bulkPhotoQueue.forEach(item=>URL.revokeObjectURL(item.url));
+  bulkPhotoQueue = [];
+  renderBulkPhotoQueue();
+  document.getElementById("bulkPhotoModalBackdrop").classList.add("open");
+  document.getElementById("bulkPhotoModal").classList.add("open");
+}
+function closeBulkPhotoModal(){
+  document.getElementById("bulkPhotoModalBackdrop").classList.remove("open");
+  document.getElementById("bulkPhotoModal").classList.remove("open");
+  bulkPhotoQueue.forEach(item=>URL.revokeObjectURL(item.url));
+  bulkPhotoQueue = [];
+}
+function isBulkPhotoModalOpen(){
+  const el = document.getElementById("bulkPhotoModal");
+  return !!(el && el.classList.contains("open"));
+}
+function addFilesToBulkQueue(files){
+  const imgs = Array.from(files || []).filter(f=>f && f.type && f.type.startsWith("image/"));
+  if(!imgs.length) return;
+  imgs.forEach(file=>{ bulkPhotoQueue.push({file, url: URL.createObjectURL(file)}); });
+  renderBulkPhotoQueue();
+}
+function removeFromBulkQueue(idx){
+  const item = bulkPhotoQueue[idx];
+  if(item) URL.revokeObjectURL(item.url);
+  bulkPhotoQueue.splice(idx,1);
+  renderBulkPhotoQueue();
+}
+function renderBulkPhotoQueue(){
+  const grid = document.getElementById("bulkPhotoGrid");
+  const empty = document.getElementById("bulkPhotoEmpty");
+  const applyBtn = document.getElementById("bulkPhotoModalApply");
+  if(!grid) return;
+  grid.innerHTML = bulkPhotoQueue.map((item,i)=>`
+    <div class="bulk-photo-thumb">
+      <img src="${item.url}" alt="">
+      <span class="bulk-photo-num">${i+1}</span>
+      <button type="button" data-idx="${i}" aria-label="Remove this photo">&times;</button>
+    </div>`).join("");
+  grid.querySelectorAll("button[data-idx]").forEach(b=>{ b.onclick = ()=>removeFromBulkQueue(+b.dataset.idx); });
+  if(empty) empty.style.display = bulkPhotoQueue.length ? "none" : "";
+  if(applyBtn){
+    applyBtn.disabled = bulkPhotoQueue.length===0;
+    applyBtn.textContent = bulkPhotoQueue.length ? `Apply to slides (${bulkPhotoQueue.length})` : "Apply to slides";
+  }
+}
+async function applyBulkPhotoQueue(){
+  if(!bulkPhotoQueue.length) return;
+  const files = bulkPhotoQueue.map(item=>item.file);
+  closeBulkPhotoModal(); // clears the queue & revokes preview URLs
+  await applyBulkImagesToSlides(files);
+}
+
 function applyLogoFileToActiveSlide(file){
   if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
   const s = state.slides[state.active];
@@ -1714,6 +1821,31 @@ function applyLayer2FileToActiveSlide(file){
     showToast("Texture added to slide " + (state.active+1));
   };
   reader.readAsDataURL(file);
+}
+function applyCutoutFileToActiveSlide(file){
+  if(!file || !file.type || !file.type.startsWith("image/")){ showToast("That file isn't an image"); return; }
+  const s = state.slides[state.active];
+  if(!s.image){ showToast("Add a base photo first"); return; }
+  const reader = new FileReader();
+  reader.onload = async ev=>{
+    s.cutoutImage = ev.target.result; s.cutoutImageEl = await loadImageEl(s.cutoutImage);
+    s.cutoutScale=1; s.cutoutOffsetX=0.5; s.cutoutOffsetY=0.5; s.cutoutOpacity=100;
+    s.dragLayer = "cutout";
+    renderAll();
+    showToast("Cutout added to slide " + (state.active+1));
+  };
+  reader.readAsDataURL(file);
+}
+/* Options for the shared "Drag on canvas" selector \u2014 built dynamically from whichever
+   layers actually have an image on this slide (photo/texture/cutout can each be absent),
+   so the same control works correctly no matter which layers exist yet. Used by both the
+   Texture and Cutout sidebar sections, reading/writing the same s.dragLayer field. */
+function dragLayerOptions(s){
+  const opts = [];
+  if(s.image) opts.push({k:"layer1", label:"Photo", active:s.dragLayer==="layer1" || !s.dragLayer});
+  if(s.layer2Image) opts.push({k:"layer2", label:"Texture", active:s.dragLayer==="layer2"});
+  if(s.cutoutImage) opts.push({k:"cutout", label:"Cutout", active:s.dragLayer==="cutout"});
+  return opts;
 }
 function getBoxes(layout, W, H){
   // `body` is an optional third region, distinct from `text`, used only by layouts
@@ -1824,7 +1956,7 @@ function overlayIcon(kind){
 // scrolling into a nested sub-section.
 const sidebarOpenState = {
   deck:true, templates:true, badge:false, safezones:true,
-  layout:true, content:true, image:true, overlay:true, texture:true, logo:false, signature:false, colors:false,
+  layout:true, content:true, image:true, overlay:true, texture:true, cutout:false, logo:false, signature:false, colors:false,
 };
 // icon: small emoji shown before the title, purely for at-a-glance scanning (mirrors the
 // "pick your starting point" clarity from reference sites \u2014 no need to read every label).
@@ -2063,10 +2195,8 @@ function renderSidebar(){
     ${sec("image", "Photo", `
     <div class="field">
       <label>Add multiple photos</label>
-      <div class="empty-hint" style="margin-top:-2px;">Upload, paste, or drag several photos at once \u2014 they fill your slides in order, adding new slides if you have more photos than slides.</div>
-      <div class="empty-hint" style="margin-top:6px;">Copied a batch of images? Just paste (Ctrl/Cmd+V) anywhere in the app.</div>
+      <div class="empty-hint" style="margin-top:-2px;">Opens a panel where you can paste images one at a time (Ctrl/Cmd+V), browse your computer, or drag several in \u2014 review them, then apply them all to your slides in order.</div>
       <button class="btn small full" id="bulkUploadBtn">\u{1F4F8} Upload multiple photos</button>
-      <input type="file" accept="image/*" multiple id="bulkFileInput" style="display:none">
     </div>
     <div class="field" style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>This slide's photo</label>
@@ -2138,18 +2268,43 @@ function renderSidebar(){
     <div class="empty-hint" style="margin-top:-4px;">Not sure? Start with a low Opacity (15\u201330%) and "Multiply" or "Soft light".</div>
     <div class="field">
       <label>Drag on canvas</label>
-      ${segmented("segDragLayer", [
-        {k:"layer1", label:"Photo", active:s.dragLayer!=="layer2"},
-        {k:"layer2", label:"Texture", active:s.dragLayer==="layer2"},
-      ])}
+      ${segmented("segDragLayer", dragLayerOptions(s))}
     </div>
-    <div class="empty-hint">Pick which one moves when you drag on the canvas \u2014 they share the same spot, so only one drags at a time.</div>
+    <div class="empty-hint">Pick which one moves when you drag on the canvas \u2014 layers share the same spot, so only one drags at a time.</div>
     <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <button class="btn small full" id="applyLayer2AllBtn">Apply this texture to all slides</button>
       <div class="empty-hint" style="margin-top:6px;">Copies the texture image, zoom, opacity, and blend mode to every slide.</div>
     </div>
     `:``}
     `, "\u2728", !!s.layer2Image)}
+    ${sec("cutout", "Text-behind-subject", `
+    <div class="empty-hint" style="margin-top:-2px;">Upload the same photo with its background removed (a transparent PNG cutout) and it'll float in front of your text \u2014 a popular "subject in front of text" effect.</div>
+    ${s.layout==="full" ? `
+    <div class="field">
+      <label>Cutout image</label>
+      <div class="imgctrl">
+        <button class="btn small" id="uploadCutoutBtn" ${s.image?"":"disabled"}>${s.cutoutImage?"Replace":"Add cutout"}</button>
+        ${s.cutoutImage?'<button class="btn small" id="removeCutoutBtn">Remove</button>':""}
+      </div>
+      <input type="file" accept="image/*" id="fileInputCutout" style="display:none">
+    </div>
+    ${!s.image?`<div class="empty-hint">Add a base photo first \u2014 the cutout is positioned relative to it.</div>`:``}
+    ${s.cutoutImage?`
+    ${rangeField("zoomRangeCutout", "Cutout zoom", 100, 300, 2, Math.round((s.cutoutScale||1)*100), Math.round((s.cutoutScale||1)*100)+"%")}
+    <div class="field"><button class="btn small full" id="resetCropBtnCutout">Reset cutout position</button></div>
+    ${rangeField("opacityRangeCutout", "Opacity", 0, 100, 1, s.cutoutOpacity??100, (s.cutoutOpacity??100)+"%")}
+    <div class="field">
+      <label>Drag on canvas</label>
+      ${segmented("segDragLayerCutout", dragLayerOptions(s))}
+    </div>
+    <div class="empty-hint">Pick which layer moves when you drag on the canvas \u2014 photo, texture, and cutout all share the same spot.</div>
+    <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
+      <button class="btn small full" id="applyCutoutAllBtn">Apply this cutout to all slides</button>
+      <div class="empty-hint" style="margin-top:6px;">Copies the cutout image, zoom, and opacity to every slide.</div>
+    </div>
+    `:``}
+    ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" to enable this effect \u2014 the cutout needs to sit in the same space as your text.</div>`}
+    `, "\u{1FA84}", !!s.cutoutImage)}
     ${sec("logo", "Logo", `
     <div class="field">
       <label>Small logo <span style="font-weight:400;color:var(--muted)">(optional watermark)</span></label>
@@ -2419,13 +2574,7 @@ function renderSidebar(){
   wireColorField("textColor", v=>{ s.textColor=v; state.activeTemplate=null; renderStage(); }, ()=>commitThumb(state.active));
 
   const bulkUploadBtn = document.getElementById("bulkUploadBtn");
-  if(bulkUploadBtn) bulkUploadBtn.onclick = ()=>document.getElementById("bulkFileInput").click();
-  const bulkFileInput = document.getElementById("bulkFileInput");
-  if(bulkFileInput) bulkFileInput.onchange = e=>{
-    const files = e.target.files;
-    if(files && files.length) applyBulkImagesToSlides(files);
-    e.target.value = "";
-  };
+  if(bulkUploadBtn) bulkUploadBtn.onclick = ()=>openBulkPhotoModal();
 
   document.getElementById("uploadBtn").onclick = ()=>document.getElementById("fileInput").click();
   document.getElementById("fileInput").onchange = e=>{
@@ -2523,8 +2672,7 @@ function renderSidebar(){
 
   document.querySelectorAll("#segDragLayer button").forEach(b=>b.onclick=()=>{
     s.dragLayer = b.dataset.k;
-    document.querySelectorAll("#segDragLayer button").forEach(x=>x.classList.toggle("active", x===b));
-    renderStage();
+    renderSidebar(); renderStage();
   });
   const applyLayer2AllBtn = document.getElementById("applyLayer2AllBtn");
   if(applyLayer2AllBtn) applyLayer2AllBtn.onclick = ()=>{
@@ -2535,6 +2683,41 @@ function renderSidebar(){
     });
     renderAll();
     showToast("Texture applied to all " + state.slides.length + " slides");
+  };
+
+  // ---- Cutout (subject rendered in front of text) ----
+  const uploadCutoutBtn = document.getElementById("uploadCutoutBtn");
+  if(uploadCutoutBtn) uploadCutoutBtn.onclick = ()=>document.getElementById("fileInputCutout").click();
+  const fileInputCutout = document.getElementById("fileInputCutout");
+  if(fileInputCutout) fileInputCutout.onchange = e=>{ const file=e.target.files[0]; if(file) applyCutoutFileToActiveSlide(file); };
+  const removeCutoutBtn = document.getElementById("removeCutoutBtn");
+  if(removeCutoutBtn) removeCutoutBtn.onclick = ()=>{ s.cutoutImage=null; s.cutoutImageEl=null; if(s.dragLayer==="cutout") s.dragLayer="layer1"; renderAll(); };
+
+  const zoomRangeCutout = document.getElementById("zoomRangeCutout");
+  if(zoomRangeCutout){
+    zoomRangeCutout.oninput = e=>{ s.cutoutScale = (+e.target.value)/100; document.getElementById("zoomLabelCutout").textContent = e.target.value+"%"; refreshImageLiveFor(layerLiveRefs.cutout && layerLiveRefs.cutout.imgEl, layerLiveRefs.cutout && layerLiveRefs.cutout.r); };
+    zoomRangeCutout.onchange = ()=>commitThumb(state.active);
+  }
+  const resetBtnCutout = document.getElementById("resetCropBtnCutout");
+  if(resetBtnCutout) resetBtnCutout.onclick = ()=>{ s.cutoutScale=1; s.cutoutOffsetX=0.5; s.cutoutOffsetY=0.5; renderSidebar(); renderStage(); commitThumb(state.active); };
+  const opacityRangeCutout = document.getElementById("opacityRangeCutout");
+  if(opacityRangeCutout){
+    opacityRangeCutout.oninput = e=>{ s.cutoutOpacity = +e.target.value; document.getElementById("opacityLabelCutout").textContent = e.target.value+"%"; renderStage(); };
+    opacityRangeCutout.onchange = ()=>commitThumb(state.active);
+  }
+  document.querySelectorAll("#segDragLayerCutout button").forEach(b=>b.onclick=()=>{
+    s.dragLayer = b.dataset.k;
+    renderSidebar(); renderStage();
+  });
+  const applyCutoutAllBtn = document.getElementById("applyCutoutAllBtn");
+  if(applyCutoutAllBtn) applyCutoutAllBtn.onclick = ()=>{
+    state.slides.forEach(sl=>{
+      sl.cutoutImage = s.cutoutImage; sl.cutoutImageEl = s.cutoutImageEl;
+      sl.cutoutScale = s.cutoutScale; sl.cutoutOffsetX = s.cutoutOffsetX; sl.cutoutOffsetY = s.cutoutOffsetY;
+      sl.cutoutOpacity = s.cutoutOpacity;
+    });
+    renderAll();
+    showToast("Cutout applied to all " + state.slides.length + " slides");
   };
 
   document.querySelectorAll(".overlay-opt").forEach(opt=>{
@@ -2755,6 +2938,35 @@ function buildSlideDOM(s, idx, editable, W){
     }
     frameBody.appendChild(p);
     div.appendChild(frameBody);
+  }
+
+  // Cutout: rendered AFTER text (frameText/frameBody above) so it sits visually in front of
+  // it \u2014 the "subject in front of text" effect. Only makes sense for "full" layout, where
+  // the image box and text box are the same region (see getBoxes); gated in the sidebar too.
+  if((s.layout||"full")==="full" && s.cutoutImage && s.cutoutImageEl){
+    const frameCutout = document.createElement("div");
+    frameCutout.className = "frame-image cutout-layer" + (editable ? " editable" : "");
+    frameCutout.style.left = boxes.image.x+"px"; frameCutout.style.top = boxes.image.y+"px";
+    frameCutout.style.width = boxes.image.w+"px"; frameCutout.style.height = boxes.image.h+"px";
+    frameCutout.style.opacity = (s.cutoutOpacity??100)/100;
+
+    const cimg = document.createElement("img");
+    cimg.src = s.cutoutImage; cimg.draggable = false;
+    const ccb = computeImageBox(s.cutoutImageEl.naturalWidth, s.cutoutImageEl.naturalHeight, boxes.image.w, boxes.image.h, s.cutoutScale||1, s.cutoutOffsetX, s.cutoutOffsetY);
+    cimg.style.left = ccb.left+"px"; cimg.style.top = ccb.top+"px";
+    cimg.style.width = ccb.dw+"px"; cimg.style.height = ccb.dh+"px";
+    frameCutout.appendChild(cimg);
+    div.appendChild(frameCutout);
+
+    if(editable){
+      const rc = makeImgRefs(s, "cutout", boxes.image.w, boxes.image.h, s.cutoutImageEl.naturalWidth, s.cutoutImageEl.naturalHeight);
+      cimg._imgRefs = rc;
+      const dragCutout = s.dragLayer==="cutout";
+      frameCutout.style.pointerEvents = dragCutout ? "auto" : "none";
+      cimg.style.pointerEvents = dragCutout ? "auto" : "none";
+      if(dragCutout) cimg.addEventListener("pointerdown", onImageDragStart);
+      layerLiveRefs.cutout = { imgEl:cimg, r:rc };
+    }
   }
 
   if(state.showPageNum){
@@ -3409,6 +3621,17 @@ async function renderSlideCanvas(s, idx, animMs){
     ctx.restore();
   }
 
+  // Cutout: drawn AFTER all text above, so it lands in front of it in the exported image too
+  // \u2014 same "subject in front of text" effect and same full-bleed-only gating as the DOM path.
+  if((s.layout||"full")==="full" && s.cutoutImage){
+    let cimg = s.cutoutImageEl;
+    if(!cimg || !cimg.complete) cimg = await loadImageEl(s.cutoutImage);
+    ctx.save();
+    ctx.globalAlpha = (s.cutoutOpacity??100)/100;
+    drawImageInBox(ctx, cimg, boxes.image, s.cutoutScale||1, s.cutoutOffsetX, s.cutoutOffsetY, 0);
+    ctx.restore();
+  }
+
   if(state.showPageNum){
     const label = `${idx+1}/${state.slides.length}`;
     const badgePx = W*0.026;
@@ -3838,6 +4061,16 @@ async function buildSlideSVG(s, idx){
     body += `</text>`;
   }
 
+  // Cutout: appended AFTER all text markup above, so it stacks in front of it \u2014 same
+  // full-bleed-only gating and same box as the DOM/Canvas paths.
+  if((s.layout||"full")==="full" && s.cutoutImage){
+    const natCW = s.cutoutImageEl ? s.cutoutImageEl.naturalWidth : W, natCH = s.cutoutImageEl ? s.cutoutImageEl.naturalHeight : H;
+    const ccb = computeImageBox(natCW, natCH, boxes.image.w, boxes.image.h, s.cutoutScale||1, s.cutoutOffsetX, s.cutoutOffsetY);
+    const cutoutClipId = `cutoutclip${idx}`;
+    defs += `<clipPath id="${cutoutClipId}"><rect x="${boxes.image.x}" y="${boxes.image.y}" width="${boxes.image.w}" height="${boxes.image.h}"/></clipPath>`;
+    body += `<g clip-path="url(#${cutoutClipId})" opacity="${((s.cutoutOpacity??100)/100).toFixed(3)}"><image href="${s.cutoutImage}" x="${(boxes.image.x+ccb.left).toFixed(1)}" y="${(boxes.image.y+ccb.top).toFixed(1)}" width="${ccb.dw.toFixed(1)}" height="${ccb.dh.toFixed(1)}"/></g>`;
+  }
+
   if(state.showPageNum){
     const label = `${idx+1}/${state.slides.length}`;
     const badgePx = W*0.026;
@@ -3963,6 +4196,30 @@ document.getElementById("aiPromptModalBackdrop").onclick = closeAIPromptModal;
 document.getElementById("aiPromptCancel").onclick = closeAIPromptModal;
 document.getElementById("aiPromptCopy").onclick = copyAIPromptText;
 
+document.getElementById("bulkPhotoModalBackdrop").onclick = closeBulkPhotoModal;
+document.getElementById("bulkPhotoModalCancel").onclick = closeBulkPhotoModal;
+document.getElementById("bulkPhotoModalApply").onclick = applyBulkPhotoQueue;
+document.getElementById("bulkPhotoBrowseBtn").onclick = ()=>document.getElementById("bulkPhotoFileInput").click();
+document.getElementById("bulkPhotoFileInput").onchange = e=>{
+  addFilesToBulkQueue(e.target.files);
+  e.target.value = "";
+};
+document.addEventListener("keydown", e=>{
+  if(e.key==="Escape" && isBulkPhotoModalOpen()) closeBulkPhotoModal();
+});
+{
+  const dz = document.getElementById("bulkPhotoDropzone");
+  let dzDepth = 0;
+  dz.addEventListener("dragover", ev=>ev.preventDefault());
+  dz.addEventListener("dragenter", ev=>{ ev.preventDefault(); dzDepth++; dz.classList.add("drag-over"); });
+  dz.addEventListener("dragleave", ()=>{ dzDepth=Math.max(0,dzDepth-1); if(dzDepth===0) dz.classList.remove("drag-over"); });
+  dz.addEventListener("drop", ev=>{
+    ev.preventDefault(); dzDepth=0; dz.classList.remove("drag-over");
+    const files = ev.dataTransfer && ev.dataTransfer.files;
+    if(files && files.length) addFilesToBulkQueue(files);
+  });
+}
+
 document.getElementById("storyPreviewBtn").onclick = openStoryMode;
 document.getElementById("storyCloseBtn").onclick = closeStoryMode;
 document.getElementById("storyBackdrop").onclick = closeStoryMode;
@@ -3988,6 +4245,7 @@ document.addEventListener("paste", (e)=>{
   }
   if(!files.length) return;
   e.preventDefault();
+  if(isBulkPhotoModalOpen()){ addFilesToBulkQueue(files); return; }
   if(files.length > 1) applyBulkImagesToSlides(files);
   else applyImageFileToActiveSlide(files[0]);
 });
