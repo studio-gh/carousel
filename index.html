@@ -206,16 +206,17 @@
   .frame-image.editable img{cursor:grab; touch-action:none;}
   .frame-image.editable img.dragging{cursor:grabbing;}
   .text-drag-handle{
-    position:absolute; top:-14px; left:-14px; width:28px; height:28px; border-radius:50%;
+    position:absolute; top:4px; left:4px; width:24px; height:24px; border-radius:50%;
     background:var(--accent-ui); color:#1A1A1A; display:flex; align-items:center; justify-content:center;
-    font-size:14px; cursor:grab; touch-action:none; box-shadow:0 2px 6px rgba(0,0,0,.4); z-index:5;
+    font-size:13px; cursor:grab; touch-action:none; box-shadow:0 2px 6px rgba(0,0,0,.4); z-index:5;
   }
   .text-drag-handle.dragging{cursor:grabbing;}
   .slide-overlay{position:absolute; pointer-events:none;} /* background set inline via overlayCSSBackground() so overlayColor can be any hex */
   .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible; pointer-events:none;}
   .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle{ pointer-events:auto; }
+  .frame-text.box-dragging, .frame-text.box-dragging .slide-heading, .frame-text.box-dragging .slide-body{ cursor:grabbing; }
   .text-resize-handle{
-    position:absolute; right:-7px; bottom:-7px; width:15px; height:15px; border-radius:50%;
+    position:absolute; right:4px; bottom:4px; width:14px; height:14px; border-radius:50%;
     background:var(--accent-ui); border:2px solid var(--panel); cursor:nwse-resize; z-index:5;
     box-shadow:0 1px 4px rgba(0,0,0,.4);
   }
@@ -383,6 +384,15 @@
   }
   .palette-swatch:hover{ border-color:var(--line-strong); transform:scale(1.08); }
   .palette-swatch:active{ transform:scale(.96); }
+  .layer-paste-zone{
+    margin-top:8px; border:1.5px dashed var(--line-strong); border-radius:8px; padding:9px 10px;
+    text-align:center; font-family:"Inter",sans-serif; font-size:11.5px; color:var(--muted);
+    cursor:pointer; transition:border-color .12s ease, color .12s ease, background .12s ease;
+  }
+  .layer-paste-zone:hover, .layer-paste-zone:focus{
+    border-color:var(--accent-ui); color:var(--accent-ui); outline:none; background:rgba(255,173,42,.06);
+  }
+  .layer-paste-zone.drag-over{ border-color:var(--accent-ui); background:rgba(255,173,42,.1); }
   .bulk-photo-dropzone{
     min-height:120px; border:1.5px dashed var(--line-strong); border-radius:10px; padding:12px;
     display:flex; align-items:center; justify-content:center; transition:background .12s ease, border-color .12s ease;
@@ -495,7 +505,7 @@
   <div class="import-modal" id="importModal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
     <h3 id="importModalTitle">Importar texto</h3>
     <p class="import-modal-hint">Cole aqui o bloco <code>carousel-import</code> gerado pela IA. Isso substitui os slides atuais (cor/fonte do template continuam, fotos e layout voltam ao padrão — você readiciona depois).</p>
-    <textarea id="importModalTextarea" rows="14" placeholder="[SLIDE 1]&#10;HEADING: ...&#10;BODY: ...&#10;&#10;[SLIDE 2]&#10;HEADING: ...&#10;BODY: ..."></textarea>
+    <textarea id="importModalTextarea" rows="14" placeholder="[SLIDE 1]&#10;texto 1: ...&#10;texto 2: ...&#10;&#10;[SLIDE 2]&#10;texto 3: ...&#10;texto 4: ..."></textarea>
     <div class="import-modal-actions">
       <button class="btn small" id="importModalCancel">Cancelar</button>
       <button class="btn small primary" id="importModalConfirm">Importar</button>
@@ -1172,13 +1182,18 @@ async function loadProjectFromFile(file){
 }
 
 /* ====================== IMPORT SCRIPT (AI carousel-import block) ======================
-   Companion tool: a separate system prompt (see HANDOFF / project files) asks an AI chat
-   to draft carousel copy, then append a plain-text block in this exact shape:
+   Companion tool: a separate system prompt (see AI_PROMPT_TEXT below, and HANDOFF / project
+   files) asks an AI chat to draft carousel copy, then append a plain-text block in this shape:
      [SLIDE 1]
-     HEADING: ...
-     BODY: ...
+     texto 1: ...
+     texto 2: ...
      [SLIDE 2]
+     texto 3: ...
+     texto 4: ...
      ...
+   "texto N" numbers run CONTINUOUSLY across the whole carousel (never reset per slide) and a
+   slide can carry 1, 2, or 3+ of them depending on what the content needs \u2014 see
+   parseCarouselImportBlock() for exactly how counts map to kicker/heading/body.
    No JSON, no markdown bold rendering (this app's text is plain — **bold** markers and
    [Visual] suggestions are stripped, not rendered), so it's forgiving to whatever an LLM
    produces and easy to eyeball/edit by hand before pasting. */
@@ -1195,14 +1210,45 @@ function parseCarouselImportBlock(raw){
   if(fence) text = fence[1];
   const chunks = text.split(/\[SLIDE\s*(\d+)\]/i);
   const slides = [];
+  // "texto N:" labels number CONTINUOUSLY across the whole carousel (never reset per slide,
+  // e.g. slide 1 might use texto 1-2, slide 2 texto 3-4, ...), and a slide can have 1, 2, or 3+
+  // of them depending on how the content fits \u2014 not a fixed count. Matches everything up to
+  // the next "texto N" label (or the end of the slide's chunk).
+  const textoRe = /texto\s*\d+[^\n:]*:\s*([\s\S]*?)(?=texto\s*\d+[^\n:]*:|$)/gi;
   for(let i=1;i<chunks.length;i+=2){
     const num = parseInt(chunks[i],10);
+    const slideNum = isNaN(num) ? slides.length+1 : num;
     const chunk = chunks[i+1] || "";
-    const headingMatch = chunk.match(/HEADING:\s*([\s\S]*?)(?:\n\s*BODY:|$)/i);
-    const bodyMatch = chunk.match(/BODY:\s*([\s\S]*)$/i);
-    const heading = stripImportMarkup(headingMatch ? headingMatch[1] : "");
-    const body = stripImportMarkup(bodyMatch ? bodyMatch[1] : "");
-    if(heading || body) slides.push({ num: isNaN(num) ? slides.length+1 : num, heading, body });
+    const textos = [];
+    textoRe.lastIndex = 0;
+    let m;
+    while((m = textoRe.exec(chunk))){
+      const t = stripImportMarkup(m[1]);
+      if(t) textos.push(t);
+    }
+    let kicker="", heading="", body="";
+    if(textos.length===0){
+      // Fallback for the older HEADING:/BODY: format (backward-compatible with anything
+      // generated or saved before the "texto N" numbering scheme existed).
+      const headingMatch = chunk.match(/HEADING:\s*([\s\S]*?)(?:\n\s*BODY:|$)/i);
+      const bodyMatch = chunk.match(/BODY:\s*([\s\S]*)$/i);
+      heading = stripImportMarkup(headingMatch ? headingMatch[1] : "");
+      body = stripImportMarkup(bodyMatch ? bodyMatch[1] : "");
+    } else if(textos.length===1){
+      heading = textos[0];
+    } else if(textos.length===2){
+      // Slide 1 (Capa) pairs a short kicker/"chap\u00e9u" with the headline; every other slide
+      // pairs a headline with its supporting body copy \u2014 matches the reference structure,
+      // where only the cover actually carries a kicker-style first block.
+      if(slideNum===1){ kicker = textos[0]; heading = textos[1]; }
+      else { heading = textos[0]; body = textos[1]; }
+    } else {
+      // 3+ textos: kicker + heading + body. Anything beyond the third gets folded into body
+      // (joined with a space) rather than dropped.
+      kicker = textos[0]; heading = textos[1];
+      body = textos.slice(2).join(" ");
+    }
+    if(kicker || heading || body) slides.push({ num: slideNum, kicker, heading, body });
   }
   slides.sort((a,b)=>a.num-b.num);
   return slides;
@@ -1221,7 +1267,7 @@ function applyImportedScript(rawText){
     const src = paletteSource[i % paletteSource.length];
     return {
       ...blankSlideDefaults(),
-      heading: p.heading, body: p.body,
+      kicker: p.kicker||"", heading: p.heading, body: p.body,
       bgColor: src.bgColor, textColor: src.textColor,
       position: src.position || "center", align: src.align || "left",
     };
@@ -1469,14 +1515,75 @@ Assim que tiver as informações suficientes (ou após o usuário responder suas
 
 ---
 
-### 🗂️ Roteiro de Slides (Carousel Studio)
+### 🗂️ Estrutura obrigatória — 9 slides, textos numerados continuamente
 
-- Slide 1 (A Capa Magnética): Gere 2 opções de títulos curtos e provocativos usando gatilhos mentais (curiosidade, dor ou ganho rápido).
-- Slide 2 (O Gancho de Retenção): Valide a dor do leitor instantaneamente. Mostre por que ele deve continuar deslizando.
-- Slides 3 a 8 (O Miolo em Pílulas): Distribua o conteúdo bruto em passos lógicos ou listas.
-  Regras: Frases curtas (máximo 3 linhas por slide). Indique palavras em **NEGRITO**. Sugira um [Elemento Visual] de apoio para cada slide.
-- Slide 9 (A Segunda Chance): Um insight forte ou frase de impacto. Este slide precisa funcionar sozinho caso o algoritmo o mostre no feed primeiro.
-- Slide 10 (A CTA Única): Uma chamada para ação clara e direta, focada na "Receita de Engajamento" escolhida no alinhamento.
+Monte o roteiro em 9 slides, cada um com uma função fixa. Dentro de cada slide, o conteúdo é dividido em "textos" (blocos curtos de copy) — e a numeração desses textos é CONTÍNUA do primeiro ao último slide do carrossel, nunca reinicia a cada slide. Ou seja: se o Slide 1 usa texto 1 e texto 2, o Slide 2 começa em texto 3, o Slide 3 em texto 5, e assim por diante até o fim.
+
+- Slide 1 → Capa (texto 1 = chapéu, texto 2 = headline)
+- Slide 2 → Hook: cria tensão, levanta contradição ou dado surpreendente
+- Slide 3 → Mecanismo parte 1: explica o porquê, o motor por trás do fenômeno
+- Slide 4 → Mecanismo parte 2: continuação do mecanismo
+- Slide 5 → Prova/Evidência: ancora em dados concretos e verificáveis
+- Slide 6 → Expansão/Virada: aprofunda ou vira a perspectiva
+- Slide 7 → Aplicação prática: traduz para o mundo real do leitor
+- Slide 8 → Direção/CTA: produto, serviço, convite
+- Slide 9 → Fechamento: virada temática genuína — nunca um resumo do que já foi dito
+
+O padrão é 2 textos por slide, mas isso é flexível: um slide pode ter só 1 texto (ex: um insight que precisa funcionar sozinho) ou 3 textos (quando o conteúdo pede um chapéu curto + duas frases de apoio). O que importa é encaixar bem no conteúdo, não bater um número fixo de blocos — a numeração simplesmente continua de onde parou, qualquer que seja a contagem final.
+
+Metas de palavras por texto quando a estrutura padrão de 2 por slide for usada (alvos, não limites rígidos — ±5 palavras é aceitável; se um slide usar 1 ou 3 textos em vez de 2, redistribua as metas proporcionalmente, mantendo chapéu/headline curtos na capa e blocos de ~18-34 palavras no miolo):
+
+| Texto | Meta |
+|---|---|
+| texto 1 (chapéu) | ~7 palavras |
+| texto 2 (headline) | ~9 palavras |
+| texto 3 | ~28 palavras |
+| texto 4 | ~25 palavras |
+| texto 5 | ~20 palavras |
+| texto 6 | ~18 palavras |
+| texto 7 | ~24 palavras |
+| texto 8 | ~34 palavras |
+| texto 9 | ~30 palavras |
+| texto 10 | ~21 palavras |
+| texto 11 | ~25 palavras |
+| texto 12 | ~23 palavras |
+| texto 13 | ~24 palavras |
+| texto 14 | ~18 palavras |
+| texto 15 | ~22 palavras |
+| texto 16 | ~20 palavras |
+| texto 17 | ~28 palavras |
+| texto 18 | ~27 palavras |
+
+---
+
+### ✅ Parâmetros de qualidade (nota mínima 8/10 em cada um)
+
+Antes de entregar o roteiro, revise cada texto contra estes critérios. Um único parâmetro abaixo de 8 reprova o carrossel inteiro — corrija e gere de novo antes de mostrar ao usuário.
+
+**Parâmetro 1 — Gramática**
+Ponto crítico mais frequente: artigos ausentes.
+❌ "em período inferior a 1 ano" → ✅ "em um período inferior a 1 ano"
+❌ "é marca genérica" → ✅ "é uma marca genérica"
+❌ "geração que cresceu com smartphone" → ✅ "uma geração que cresceu com smartphone"
+Regra de penalidade: artigo ausente → nota máxima 7/10.
+Também verifique: concordância verbal (sujeito plural exige verbo plural), fragmentos sem verbo (ex: "Proteína para não perder músculo" não é frase completa), e regência nominal.
+
+**Parâmetro 2 — Fluidez**
+O teste: leia o bloco em voz alta. Se soou robótico, truncado, ou pareceu lista disfarçada de frase → reprovado. Cada bloco precisa funcionar como parágrafo de reportagem — com sujeito, verbo, complemento e conectivos.
+❌ Texto picotado: "Vendas é execução. Performance importa. Resultado define carreira. Melhor vendedor vence."
+✅ Texto fluido: "Vendas é execução individual, porque performance no cara a cara é o que conta quando o resultado precisa aparecer — e o melhor vendedor vence no talento puro aplicado com consistência."
+Conectivos obrigatórios (use-os): porque, só que, por isso, enquanto, quando, e, mas, aí, então, mesmo assim, ainda assim.
+Regra de penalidade: bloco picotado sem conectivos → nota máxima 5/10.
+
+**Parâmetro 3 — AI Slop (evitar "cheiro de IA")**
+Estruturas binárias — proibidas absolutamente: "Não é X, é Y" / "Não é sobre X, é sobre Y" / "X diminui, Y acelera" / "Menos X. Mais Y." / "Sem X. Sem Y." / "Deixa de ser X para ser Y".
+  ❌ "Engajamento vem de identificação emocional, não de expertise" → ✅ "Engajamento nasce quando o leitor se reconhece no tema — e esse reconhecimento acontece muito antes de qualquer expertise entrar em cena."
+  ❌ "Sem expertise técnico. Sem anos de estudo." → ✅ "O tema certo distribui o post para quem ainda não te conhece — e é essa audiência nova que transforma alcance em crescimento de base."
+Cacoetes de IA — proibidos: "A lógica/o mecanismo funciona assim:", "A pergunta que fica:" / "A questão é:" / "O ponto é:", "E isso muda tudo", "No fim das contas" / "Ao final do dia", "usando as mesmas 24 horas que qualquer pessoa tem".
+Jargão corporativo — proibido: "ativo comercial" (use "oportunidade comercial"), "vantagem competitiva estrutural" (use "vantagem duradoura"), "hit rate" em texto corrido (use "taxa de viralização"), "processamento contínuo de baixa intensidade" (use "mais trabalho pra cabeça").
+Anglicismos numéricos — proibidos em texto corrido: "10+ anos" (use "mais de 10 anos"), "5x maior" (use "cinco vezes maior"), "2-3 anos" (use "dois ou três anos").
+Construções genéricas — proibidas: "de forma clara/consistente/natural" (ex: "cresceu de forma consistente" → "cresceu sem parar").
+Regra de penalidade: uma estrutura binária → nota máxima 6/10. Um cacoete proibido → nota máxima 5/10.
 
 Pergunte ao usuário qual das 2 opções de título do Slide 1 ele prefere (ou se quer ajustar) antes de seguir pra Fase 3. A Fase 3 só deve rodar depois que o roteiro acima estiver aprovado pelo usuário.
 
@@ -1487,54 +1594,50 @@ Pergunte ao usuário qual das 2 opções de título do Slide 1 ele prefere (ou s
 Depois que o usuário aprovar o roteiro (e escolher o título final do Slide 1), gere também este segundo bloco, em texto puro, dentro de uma cerca \`\`\`carousel-import. Esse bloco é só para colar no app — não mostre esse formato cru como se fosse o roteiro final pro leitor.
 
 Regras do bloco:
-- Exatamente 10 slides, numerados [SLIDE 1] a [SLIDE 10], nessa ordem.
-- Cada slide tem HEADING: (obrigatório) e BODY: (pode ficar vazio se o slide só tiver título/imagem, como costuma acontecer nos Slides 1 e 9).
-- No Slide 1, use só o título final escolhido — nunca as 2 opções juntas.
-- Pode manter **negrito** e [Elemento Visual: ...] dentro do texto — o importador do Carousel Studio remove isso sozinho, é só uma referência visual pra você.
+- Numere os slides [SLIDE 1] em diante, na ordem do roteiro aprovado (o padrão é 9 slides, mas siga o que foi de fato aprovado).
+- Dentro de cada slide, numere os textos como "texto N:" — essa numeração é CONTÍNUA do início ao fim do carrossel e NUNCA reinicia a cada slide.
+- Cada slide leva 1, 2 ou 3 textos, o que encaixar melhor no conteúdo aprovado (o padrão é 2).
+- Pode manter **negrito** dentro do texto — o importador do Carousel Studio remove isso sozinho, é só uma referência visual pra você. Não use colchetes [assim] dentro dos textos (o importador os apaga).
 - Não inclua nada além do que existe no roteiro aprovado (sem inventar conteúdo novo nessa etapa).
 
-Formato exato (copie a estrutura, não os placeholders):
+Formato exato (copie a estrutura, não os placeholders — este exemplo mostra a estrutura padrão de 9 slides / 2 textos cada; ajuste a contagem de textos por slide conforme o roteiro aprovado):
 
 \`\`\`carousel-import
 [SLIDE 1]
-HEADING: <título final aprovado>
-BODY:
+texto 1: <chapéu>
+texto 2: <título final aprovado>
 
 [SLIDE 2]
-HEADING: <gancho de retenção>
-BODY: <complemento do gancho, se houver>
+texto 3: <hook — cria tensão ou contradição>
+texto 4: <hook — complemento>
 
 [SLIDE 3]
-HEADING: <passo 1 / pílula 1>
-BODY: <explicação curta>
+texto 5: <mecanismo parte 1>
+texto 6: <mecanismo parte 1 — complemento>
 
 [SLIDE 4]
-HEADING: <passo 2 / pílula 2>
-BODY: <explicação curta>
+texto 7: <mecanismo parte 2>
+texto 8: <mecanismo parte 2 — complemento>
 
 [SLIDE 5]
-HEADING: <passo 3 / pílula 3>
-BODY: <explicação curta>
+texto 9: <prova/evidência>
+texto 10: <prova/evidência — complemento>
 
 [SLIDE 6]
-HEADING: <passo 4 / pílula 4>
-BODY: <explicação curta>
+texto 11: <expansão/virada>
+texto 12: <expansão/virada — complemento>
 
 [SLIDE 7]
-HEADING: <passo 5 / pílula 5>
-BODY: <explicação curta>
+texto 13: <aplicação prática>
+texto 14: <aplicação prática — complemento>
 
 [SLIDE 8]
-HEADING: <passo 6 / pílula 6>
-BODY: <explicação curta>
+texto 15: <direção/CTA>
+texto 16: <direção/CTA — complemento>
 
 [SLIDE 9]
-HEADING: <insight de impacto, funciona sozinho>
-BODY:
-
-[SLIDE 10]
-HEADING: <CTA única e clara>
-BODY: <complemento da CTA, se houver>
+texto 17: <fechamento — virada temática genuína>
+texto 18: <fechamento — complemento>
 \`\`\``;
 
 function openAIPromptModal(){
@@ -1846,6 +1949,35 @@ function dragLayerOptions(s){
   if(s.layer2Image) opts.push({k:"layer2", label:"Texture", active:s.dragLayer==="layer2"});
   if(s.cutoutImage) opts.push({k:"cutout", label:"Cutout", active:s.dragLayer==="cutout"});
   return opts;
+}
+/* A small focusable zone that accepts a pasted or dropped image and routes it to a specific
+   layer (texture or cutout) rather than the base photo \u2014 the global document-level paste
+   listener always defaults a bare Ctrl/Cmd+V to the base photo (or, if the bulk-photo modal is
+   open, to that queue), so without this there'd be no way to paste directly into a secondary
+   layer. Click the zone (or Tab to it) to focus it, then paste; the element is rebuilt on every
+   renderSidebar() call like the rest of the sidebar, so this re-wires fresh each time. */
+function wireLayerPasteZone(id, applyFn){
+  const zone = document.getElementById(id);
+  if(!zone) return;
+  zone.addEventListener("paste", e=>{
+    const items = e.clipboardData && e.clipboardData.items;
+    if(!items) return;
+    for(const item of items){
+      if(item.type && item.type.startsWith("image/")){
+        const file = item.getAsFile();
+        if(file){ e.preventDefault(); e.stopPropagation(); applyFn(file); }
+        break;
+      }
+    }
+  });
+  zone.addEventListener("dragover", e=>e.preventDefault());
+  zone.addEventListener("dragenter", e=>{ e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", ()=>zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", e=>{
+    e.preventDefault(); zone.classList.remove("drag-over");
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if(file) applyFn(file);
+  });
 }
 function getBoxes(layout, W, H){
   // `body` is an optional third region, distinct from `text`, used only by layouts
@@ -2253,6 +2385,7 @@ function renderSidebar(){
         ${s.layer2Image?'<button class="btn small" id="removeLayer2Btn">Remove</button>':""}
       </div>
       <input type="file" accept="image/*" id="fileInput2" style="display:none">
+      ${s.image?`<div class="layer-paste-zone" id="layer2PasteZone" tabindex="0">\u{1F4CB} Click here, then paste (Ctrl/Cmd+V) \u2014 or drag a file in</div>`:``}
     </div>
     ${!s.image?`<div class="empty-hint">Add a photo first \u2014 the texture blends on top of it.</div>`:``}
     ${s.layer2Image?`
@@ -2287,6 +2420,7 @@ function renderSidebar(){
         ${s.cutoutImage?'<button class="btn small" id="removeCutoutBtn">Remove</button>':""}
       </div>
       <input type="file" accept="image/*" id="fileInputCutout" style="display:none">
+      ${s.image?`<div class="layer-paste-zone" id="cutoutPasteZone" tabindex="0">\u{1F4CB} Click here, then paste (Ctrl/Cmd+V) \u2014 or drag a file in</div>`:``}
     </div>
     ${!s.image?`<div class="empty-hint">Add a base photo first \u2014 the cutout is positioned relative to it.</div>`:``}
     ${s.cutoutImage?`
@@ -2653,6 +2787,7 @@ function renderSidebar(){
   if(fileInput2) fileInput2.onchange = e=>{ const file=e.target.files[0]; if(file) applyLayer2FileToActiveSlide(file); };
   const rmBtn2 = document.getElementById("removeLayer2Btn");
   if(rmBtn2) rmBtn2.onclick = ()=>{ s.layer2Image=null; s.layer2ImageEl=null; s.dragLayer="layer1"; renderAll(); };
+  wireLayerPasteZone("layer2PasteZone", applyLayer2FileToActiveSlide);
 
   const zoomRange2 = document.getElementById("zoomRange2");
   if(zoomRange2){
@@ -2692,6 +2827,7 @@ function renderSidebar(){
   if(fileInputCutout) fileInputCutout.onchange = e=>{ const file=e.target.files[0]; if(file) applyCutoutFileToActiveSlide(file); };
   const removeCutoutBtn = document.getElementById("removeCutoutBtn");
   if(removeCutoutBtn) removeCutoutBtn.onclick = ()=>{ s.cutoutImage=null; s.cutoutImageEl=null; if(s.dragLayer==="cutout") s.dragLayer="layer1"; renderAll(); };
+  wireLayerPasteZone("cutoutPasteZone", applyCutoutFileToActiveSlide);
 
   const zoomRangeCutout = document.getElementById("zoomRangeCutout");
   if(zoomRangeCutout){
@@ -2847,11 +2983,21 @@ function buildSlideDOM(s, idx, editable, W){
   const detached = !!s.bodyDetached;
   const frameText = document.createElement("div");
   frameText.className = `frame-text pos-${s.position} align-${s.align}`;
-  const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
   const textBoxW = (s.textBoxWRatio||1) * boxes.text.w;
   const textBoxH = (s.textBoxHRatio||1) * boxes.text.h;
-  frameText.style.left = (boxes.text.x+pad+toX)+"px"; frameText.style.top = (boxes.text.y+pad+toY)+"px";
-  frameText.style.width = Math.max(10,textBoxW-2*pad)+"px"; frameText.style.height = Math.max(10,textBoxH-2*pad)+"px";
+  const textBoxWPx = Math.max(10,textBoxW-2*pad), textBoxHPx = Math.max(10,textBoxH-2*pad);
+  let textLeftPx = boxes.text.x+pad+(s.textOffsetX||0), textTopPx = boxes.text.y+pad+(s.textOffsetY||0);
+  // Self-heal: if a stored offset would place this box (and its corner handle) off-canvas
+  // \u2014 most likely a slide saved before this safety clamp existed \u2014 pull it back on-screen
+  // now instead of leaving it permanently unreachable except via Undo.
+  {
+    const maxLeft = Math.max(0, W-textBoxWPx), maxTop = Math.max(0, H-textBoxHPx);
+    const clampedLeft = clamp(textLeftPx, 0, maxLeft), clampedTop = clamp(textTopPx, 0, maxTop);
+    if(clampedLeft!==textLeftPx){ s.textOffsetX = (s.textOffsetX||0) + (clampedLeft-textLeftPx); textLeftPx = clampedLeft; }
+    if(clampedTop!==textTopPx){ s.textOffsetY = (s.textOffsetY||0) + (clampedTop-textTopPx); textTopPx = clampedTop; }
+  }
+  frameText.style.left = textLeftPx+"px"; frameText.style.top = textTopPx+"px";
+  frameText.style.width = textBoxWPx+"px"; frameText.style.height = textBoxHPx+"px";
   frameText.style.gap = ts.gap+"px";
 
   if(editable){
@@ -2887,6 +3033,7 @@ function buildSlideDOM(s, idx, editable, W){
     h.addEventListener("focus", ()=>{ h.innerText = s.heading||""; });
     h.addEventListener("input", ()=>{ s.heading = h.innerText; fitText(div, frameText, s); scheduleThumbCommit(idx); });
     h.addEventListener("blur", ()=>{ s.heading = h.innerText; h.innerHTML = headingHTML(s.heading, s.textColor, s.headAccentColor||DEFAULT_HEAD_ACCENT); commitThumb(idx); });
+    attachBoxDragFromContent(h, frameText, s, "textOffsetX", "textOffsetY", W, H);
   }
   frameText.appendChild(h);
 
@@ -2899,6 +3046,7 @@ function buildSlideDOM(s, idx, editable, W){
     if(editable){
       p.addEventListener("input", ()=>{ s.body = p.innerText; fitText(div, frameText, s); scheduleThumbCommit(idx); });
       p.addEventListener("blur", ()=>{ s.body = p.innerText; commitThumb(idx); });
+      attachBoxDragFromContent(p, frameText, s, "textOffsetX", "textOffsetY", W, H);
     }
     frameText.appendChild(p);
   }
@@ -2908,11 +3056,18 @@ function buildSlideDOM(s, idx, editable, W){
     const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     frameBody = document.createElement("div");
     frameBody.className = `frame-text pos-${s.bodyPosition||"top"} align-${bAlign}`;
-    const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
     const bodyBoxW = (s.bodyBoxWRatio||1) * boxes.body.w;
     const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.body.h;
-    frameBody.style.left = (boxes.body.x+pad+bToX)+"px"; frameBody.style.top = (boxes.body.y+pad+bToY)+"px";
-    frameBody.style.width = Math.max(10,bodyBoxW-2*pad)+"px"; frameBody.style.height = Math.max(10,bodyBoxH-2*pad)+"px";
+    const bodyBoxWPx = Math.max(10,bodyBoxW-2*pad), bodyBoxHPx = Math.max(10,bodyBoxH-2*pad);
+    let bodyLeftPx = boxes.body.x+pad+(s.bodyOffsetX||0), bodyTopPx = boxes.body.y+pad+(s.bodyOffsetY||0);
+    {
+      const maxLeft = Math.max(0, W-bodyBoxWPx), maxTop = Math.max(0, H-bodyBoxHPx);
+      const clampedLeft = clamp(bodyLeftPx, 0, maxLeft), clampedTop = clamp(bodyTopPx, 0, maxTop);
+      if(clampedLeft!==bodyLeftPx){ s.bodyOffsetX = (s.bodyOffsetX||0) + (clampedLeft-bodyLeftPx); bodyLeftPx = clampedLeft; }
+      if(clampedTop!==bodyTopPx){ s.bodyOffsetY = (s.bodyOffsetY||0) + (clampedTop-bodyTopPx); bodyTopPx = clampedTop; }
+    }
+    frameBody.style.left = bodyLeftPx+"px"; frameBody.style.top = bodyTopPx+"px";
+    frameBody.style.width = bodyBoxWPx+"px"; frameBody.style.height = bodyBoxHPx+"px";
 
     if(editable){
       const bHandle = document.createElement("div");
@@ -2935,6 +3090,7 @@ function buildSlideDOM(s, idx, editable, W){
     if(editable){
       p.addEventListener("input", ()=>{ s.body = p.innerText; fitDetachedBody(div, frameBody, s); scheduleThumbCommit(idx); });
       p.addEventListener("blur", ()=>{ s.body = p.innerText; commitThumb(idx); });
+      attachBoxDragFromContent(p, frameBody, s, "bodyOffsetX", "bodyOffsetY", W, H);
     }
     frameBody.appendChild(p);
     div.appendChild(frameBody);
@@ -3153,18 +3309,30 @@ function onImageDragEnd(){
 /* Generic drag-to-reposition for a text box. Used for both the headline/kicker
    box (offXKey/offYKey = "textOffsetX"/"textOffsetY") and, when the support text
    is detached, its own box ("bodyOffsetX"/"bodyOffsetY") \u2014 each handle gets its
-   own closure so both boxes can be dragged independently without sharing state. */
+   own closure so both boxes can be dragged independently without sharing state.
+   Clamps the box's actual on-screen rectangle to stay fully inside [0,W]x[0,H] \u2014
+   previously only the offset itself was clamped to a flat \u00b145% of the canvas,
+   which let a box (and its handle, sitting just outside its corner) get dragged
+   until the handle landed outside the slide's clipped area and became permanently
+   unreachable except via Undo. Keeping the whole box on-canvas means its corner,
+   and therefore the handle sitting right at that corner, can never do that. */
 function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
     const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
+    const startLeft = parseFloat(moveEl.style.left)||0, startTop = parseFloat(moveEl.style.top)||0;
+    const naturalLeft = startLeft - baseOffX, naturalTop = startTop - baseOffY;
+    const boxW = moveEl.offsetWidth, boxH = moveEl.offsetHeight;
+    const maxLeft = Math.max(0, W - boxW), maxTop = Math.max(0, H - boxH);
     let dx = 0, dy = 0;
     handle.classList.add("dragging");
     try{ handle.setPointerCapture(e.pointerId); }catch(err){}
     const onMove = ev=>{
       ev.preventDefault();
-      dx = ev.clientX-startX; dy = ev.clientY-startY;
+      const clampedLeft = clamp(startLeft + (ev.clientX-startX), 0, maxLeft);
+      const clampedTop = clamp(startTop + (ev.clientY-startY), 0, maxTop);
+      dx = clampedLeft - startLeft; dy = clampedTop - startTop;
       moveEl.style.transform = `translate(${dx}px, ${dy}px)`;
     };
     const onUp = ()=>{
@@ -3172,8 +3340,8 @@ function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onUp);
       handle.classList.remove("dragging");
-      s[offXKey] = clamp(baseOffX + dx, -W*0.45, W*0.45);
-      s[offYKey] = clamp(baseOffY + dy, -H*0.45, H*0.45);
+      s[offXKey] = (startLeft+dx) - naturalLeft;
+      s[offYKey] = (startTop+dy) - naturalTop;
       renderStage();
       commitThumb(state.active);
     };
@@ -3183,21 +3351,89 @@ function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
   });
 }
 
+/* Canva-style alternative to the dedicated handle: click-and-drag directly on the text
+   itself moves the whole box. Only arms once movement crosses a small threshold, so a
+   plain click still places the caret/enters editing exactly as before \u2014 nothing changes
+   about that path. Deliberately does nothing if the field is ALREADY focused (mid-edit),
+   so dragging across text to select a range \u2014 needed for the per-word emphasis feature
+   (color/outline/highlight markup) \u2014 keeps working: click once to enter editing, then a
+   second click-drag selects text as usual; only the "not yet editing" drag becomes a move. */
+function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
+  const DRAG_THRESHOLD = 6;
+  el.addEventListener("pointerdown", e=>{
+    if(document.activeElement === el) return; // already editing \u2014 let native text selection work
+    const startX = e.clientX, startY = e.clientY;
+    const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
+    const startLeft = parseFloat(moveEl.style.left)||0, startTop = parseFloat(moveEl.style.top)||0;
+    const naturalLeft = startLeft - baseOffX, naturalTop = startTop - baseOffY;
+    const boxW = moveEl.offsetWidth, boxH = moveEl.offsetHeight;
+    const maxLeft = Math.max(0, W - boxW), maxTop = Math.max(0, H - boxH);
+    let dragging = false, dx = 0, dy = 0;
+    const onMove = ev=>{
+      const rawDx = ev.clientX-startX, rawDy = ev.clientY-startY;
+      if(!dragging && Math.hypot(rawDx, rawDy) > DRAG_THRESHOLD){
+        dragging = true;
+        const sel = window.getSelection && window.getSelection();
+        if(sel) sel.removeAllRanges();
+        if(document.activeElement===el) el.blur();
+        moveEl.classList.add("box-dragging");
+        // The upcoming mouseup still fires a native "click" even though the pointer moved,
+        // which would refocus this field and place a caret right where the drag ended \u2014
+        // undoing the blur() above. Swallow exactly that one click, then stop listening.
+        el.addEventListener("click", ev2=>{ ev2.preventDefault(); ev2.stopPropagation(); }, {capture:true, once:true});
+      }
+      if(dragging){
+        ev.preventDefault();
+        const clampedLeft = clamp(startLeft+rawDx, 0, maxLeft);
+        const clampedTop = clamp(startTop+rawDy, 0, maxTop);
+        dx = clampedLeft-startLeft; dy = clampedTop-startTop;
+        moveEl.style.transform = `translate(${dx}px, ${dy}px)`;
+      }
+    };
+    const onUp = ()=>{
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      if(dragging){
+        moveEl.classList.remove("box-dragging");
+        s[offXKey] = (startLeft+dx) - naturalLeft;
+        s[offYKey] = (startTop+dy) - naturalTop;
+        moveEl.style.transform = "";
+        renderStage();
+        commitThumb(state.active);
+      }
+      // If it never crossed the threshold, do nothing \u2014 the native click proceeds
+      // (focus + caret placement), exactly like before this feature existed.
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  });
+}
+
 /* Resize the text box itself (distinct from repositioning it). Drag from the
-   bottom-right handle to change how much width/height the text has to wrap into. */
+   bottom-right handle to change how much width/height the text has to wrap into.
+   Also clamps so the box's right/bottom edge can never be pushed past the canvas
+   \u2014 same "handle must stay reachable" reasoning as attachTextDrag above. */
 function attachTextResize(handle, frameTextEl, slideDiv, s, availW, availH, pad){
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
     const startWRatio = s.textBoxWRatio || 1, startHRatio = s.textBoxHRatio || 1;
+    const W = parseFloat(slideDiv.style.width), H = parseFloat(slideDiv.style.height);
+    const boxLeft = parseFloat(frameTextEl.style.left)||0, boxTop = parseFloat(frameTextEl.style.top)||0;
+    const maxBoxW = Math.max(40, W - boxLeft - 4), maxBoxH = Math.max(40, H - boxTop - 4);
     handle.classList.add("dragging");
     try{ handle.setPointerCapture(e.pointerId); }catch(err){}
     const onMove = ev=>{
       ev.preventDefault();
       const dx = ev.clientX-startX, dy = ev.clientY-startY;
-      s.textBoxWRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
-      s.textBoxHRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
-      const boxW = s.textBoxWRatio*availW, boxH = s.textBoxHRatio*availH;
+      let wRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
+      let hRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
+      let boxW = wRatio*availW, boxH = hRatio*availH;
+      if(boxW > maxBoxW){ boxW = maxBoxW; wRatio = boxW/availW; }
+      if(boxH > maxBoxH){ boxH = maxBoxH; hRatio = boxH/availH; }
+      s.textBoxWRatio = wRatio; s.textBoxHRatio = hRatio;
       frameTextEl.style.width = Math.max(10, boxW-2*pad)+"px";
       frameTextEl.style.height = Math.max(10, boxH-2*pad)+"px";
       fitText(slideDiv, frameTextEl, s);
@@ -3216,20 +3452,26 @@ function attachTextResize(handle, frameTextEl, slideDiv, s, availW, availH, pad)
 }
 
 /* Same as attachTextResize, but resizes the detached body box (bodyBoxWRatio/HRatio)
-   and re-fits with fitDetachedBody instead of fitText. */
+   and re-fits with fitDetachedBody instead of fitText. Same on-canvas clamp applied. */
 function attachBodyResize(handle, frameBodyEl, slideDiv, s, availW, availH, pad){
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
     const startWRatio = s.bodyBoxWRatio || 1, startHRatio = s.bodyBoxHRatio || 1;
+    const W = parseFloat(slideDiv.style.width), H = parseFloat(slideDiv.style.height);
+    const boxLeft = parseFloat(frameBodyEl.style.left)||0, boxTop = parseFloat(frameBodyEl.style.top)||0;
+    const maxBoxW = Math.max(40, W - boxLeft - 4), maxBoxH = Math.max(40, H - boxTop - 4);
     handle.classList.add("dragging");
     try{ handle.setPointerCapture(e.pointerId); }catch(err){}
     const onMove = ev=>{
       ev.preventDefault();
       const dx = ev.clientX-startX, dy = ev.clientY-startY;
-      s.bodyBoxWRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
-      s.bodyBoxHRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
-      const boxW = s.bodyBoxWRatio*availW, boxH = s.bodyBoxHRatio*availH;
+      let wRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
+      let hRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
+      let boxW = wRatio*availW, boxH = hRatio*availH;
+      if(boxW > maxBoxW){ boxW = maxBoxW; wRatio = boxW/availW; }
+      if(boxH > maxBoxH){ boxH = maxBoxH; hRatio = boxH/availH; }
+      s.bodyBoxWRatio = wRatio; s.bodyBoxHRatio = hRatio;
       frameBodyEl.style.width = Math.max(10, boxW-2*pad)+"px";
       frameBodyEl.style.height = Math.max(10, boxH-2*pad)+"px";
       fitDetachedBody(slideDiv, frameBodyEl, s);
