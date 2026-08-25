@@ -1204,10 +1204,32 @@ function stripImportMarkup(t){
     .replace(/[ \t]+$/gm, "")
     .trim();
 }
+/* Isolates the actual carousel-import content from whatever the person pasted. Deliberately
+   NOT just "grab the first ``` ... ``` pair": if the AI's reply shows CODE that builds the
+   block before showing the block itself (e.g. a Python script whose source literally contains
+   the text "```carousel-import" as a string literal), a naive first-fence grab can terminate
+   at that embedded ``` sequence and capture almost nothing \u2014 confirmed bug, not hypothetical.
+   Instead: find every fence explicitly tagged ```carousel-import (what our own AI prompt always
+   asks for) and use the LAST one, since a reply that repeats the block \u2014 code demo first,
+   real output last \u2014 puts the intended final version at the end. Falls back to an untagged
+   fence, then to the raw text itself, so nothing that used to work stops working. */
+function extractCarouselImportFence(raw){
+  const text = raw || "";
+  const taggedRe = /```carousel-import\s*\n([\s\S]*?)```/gi;
+  let m, lastTagged = null;
+  while((m = taggedRe.exec(text))) lastTagged = m[1];
+  if(lastTagged && /\[SLIDE\s*\d+\]/i.test(lastTagged)) return lastTagged;
+
+  const generic = text.match(/```[^\n]*\n([\s\S]*?)```/);
+  if(generic && /\[SLIDE\s*\d+\]/i.test(generic[1])) return generic[1];
+
+  // No fence confidently isolated \u2014 just scan everything. Harmless even with extra
+  // prose/code around it, since anything that isn't a [SLIDE N] marker is simply never
+  // included in a parsed chunk below.
+  return text;
+}
 function parseCarouselImportBlock(raw){
-  let text = (raw||"").trim();
-  const fence = text.match(/```[^\n]*\n([\s\S]*?)```/);
-  if(fence) text = fence[1];
+  const text = extractCarouselImportFence((raw||"").trim());
   const chunks = text.split(/\[SLIDE\s*(\d+)\]/i);
   const slides = [];
   // "texto N:" labels number CONTINUOUSLY across the whole carousel (never reset per slide,
