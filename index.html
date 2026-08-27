@@ -216,11 +216,17 @@
   .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle{ pointer-events:auto; }
   .frame-text.box-dragging, .frame-text.box-dragging .slide-heading, .frame-text.box-dragging .slide-body{ cursor:grabbing; }
   .text-resize-handle{
-    position:absolute; right:4px; bottom:4px; width:14px; height:14px; border-radius:50%;
-    background:var(--accent-ui); border:2px solid var(--panel); cursor:nwse-resize; z-index:5;
+    position:absolute; width:12px; height:12px; border-radius:3px;
+    background:var(--accent-ui); border:2px solid var(--panel); z-index:6;
     box-shadow:0 1px 4px rgba(0,0,0,.4);
   }
-  .text-resize-handle.dragging{ transform:scale(1.15); }
+  /* Sit centered ON the box's own border at each corner \u2014 half in, half out \u2014
+     the same placement Canva/PowerPoint use for their corner resize handles. */
+  .text-resize-handle.corner-nw{ left:-6px; top:-6px; cursor:nwse-resize; }
+  .text-resize-handle.corner-ne{ right:-6px; top:-6px; cursor:nesw-resize; }
+  .text-resize-handle.corner-sw{ left:-6px; bottom:-6px; cursor:nesw-resize; }
+  .text-resize-handle.corner-se{ right:-6px; bottom:-6px; cursor:nwse-resize; }
+  .text-resize-handle.dragging{ transform:scale(1.2); }
   .slide-kicker{ font-weight:700; letter-spacing:.08em; text-transform:uppercase; opacity:.7; }
   .frame-text.pos-top{justify-content:flex-start;}
   .frame-text.pos-center{justify-content:center;}
@@ -2344,7 +2350,7 @@ function renderSidebar(){
       ])}
     </div>
     `:``}`)}
-    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too.${uiMode==="slow"?" Drag the dot at the corner of the text box on the canvas to resize it.":""}</div>
+    <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too.${uiMode==="slow"?" Drag any of the 4 corner handles on the text box to resize it \u2014 the opposite corner stays put, just like Canva or PowerPoint.":""}</div>
     `, "\u270D\uFE0F")}
     ${sec("image", "Photo", `
     <div class="field">
@@ -3012,11 +3018,22 @@ function buildSlideDOM(s, idx, editable, W){
   // Self-heal: if a stored offset would place this box (and its corner handle) off-canvas
   // \u2014 most likely a slide saved before this safety clamp existed \u2014 pull it back on-screen
   // now instead of leaving it permanently unreachable except via Undo.
+  // IMPORTANT: this must only ever WRITE BACK into `s` from the real editable stage render.
+  // buildSlideDOM is also called for thumbnails (W=220, see buildThumb) and Story preview
+  // (W sized to the viewport) \u2014 both use a much smaller/different W than the stage the user
+  // actually dragged in, so the exact same offset that's perfectly valid on the ~460px stage
+  // looks "out of bounds" at 220px and would otherwise get silently shrunk and saved back,
+  // clobbering the user's placement the moment the thumbnail next redraws (e.g. right after
+  // dropping the drag, via commitThumb). Non-editable passes still clamp the LOCAL px used
+  // for this one render's style, they just don't persist that correction into the slide data.
   {
     const maxLeft = Math.max(0, W-textBoxWPx), maxTop = Math.max(0, H-textBoxHPx);
     const clampedLeft = clamp(textLeftPx, 0, maxLeft), clampedTop = clamp(textTopPx, 0, maxTop);
-    if(clampedLeft!==textLeftPx){ s.textOffsetX = (s.textOffsetX||0) + (clampedLeft-textLeftPx); textLeftPx = clampedLeft; }
-    if(clampedTop!==textTopPx){ s.textOffsetY = (s.textOffsetY||0) + (clampedTop-textTopPx); textTopPx = clampedTop; }
+    if(editable){
+      if(clampedLeft!==textLeftPx) s.textOffsetX = (s.textOffsetX||0) + (clampedLeft-textLeftPx);
+      if(clampedTop!==textTopPx) s.textOffsetY = (s.textOffsetY||0) + (clampedTop-textTopPx);
+    }
+    textLeftPx = clampedLeft; textTopPx = clampedTop;
   }
   frameText.style.left = textLeftPx+"px"; frameText.style.top = textTopPx+"px";
   frameText.style.width = textBoxWPx+"px"; frameText.style.height = textBoxHPx+"px";
@@ -3029,11 +3046,7 @@ function buildSlideDOM(s, idx, editable, W){
     attachTextDrag(handle, frameText, s, "textOffsetX", "textOffsetY", W, H);
     frameText.appendChild(handle);
 
-    const resizeHandle = document.createElement("div");
-    resizeHandle.className = "text-resize-handle";
-    resizeHandle.title = "Drag to resize text box";
-    frameText.appendChild(resizeHandle);
-    attachTextResize(resizeHandle, frameText, div, s, boxes.text.w, boxes.text.h, pad);
+    addCornerResizeHandles(frameText, div, s, "textBoxWRatio", "textBoxHRatio", "textOffsetX", "textOffsetY", boxes.text.w, boxes.text.h, pad, ()=>fitText(div, frameText, s));
   }
 
   if(s.kicker && s.kicker.trim()){
@@ -3082,11 +3095,19 @@ function buildSlideDOM(s, idx, editable, W){
     const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.body.h;
     const bodyBoxWPx = Math.max(10,bodyBoxW-2*pad), bodyBoxHPx = Math.max(10,bodyBoxH-2*pad);
     let bodyLeftPx = boxes.body.x+pad+(s.bodyOffsetX||0), bodyTopPx = boxes.body.y+pad+(s.bodyOffsetY||0);
+    // Same "editable-only self-heal" reasoning as the headline box above \u2014 see that
+    // comment. Without this guard, this is the exact bug reported: detach the body,
+    // drag it somewhere, and the very next thumbnail redraw (W=220) silently rewrites
+    // s.bodyOffsetX/Y down to whatever fits in a 220px-wide canvas, so the position
+    // looks "reset" the moment you leave and come back to the slide.
     {
       const maxLeft = Math.max(0, W-bodyBoxWPx), maxTop = Math.max(0, H-bodyBoxHPx);
       const clampedLeft = clamp(bodyLeftPx, 0, maxLeft), clampedTop = clamp(bodyTopPx, 0, maxTop);
-      if(clampedLeft!==bodyLeftPx){ s.bodyOffsetX = (s.bodyOffsetX||0) + (clampedLeft-bodyLeftPx); bodyLeftPx = clampedLeft; }
-      if(clampedTop!==bodyTopPx){ s.bodyOffsetY = (s.bodyOffsetY||0) + (clampedTop-bodyTopPx); bodyTopPx = clampedTop; }
+      if(editable){
+        if(clampedLeft!==bodyLeftPx) s.bodyOffsetX = (s.bodyOffsetX||0) + (clampedLeft-bodyLeftPx);
+        if(clampedTop!==bodyTopPx) s.bodyOffsetY = (s.bodyOffsetY||0) + (clampedTop-bodyTopPx);
+      }
+      bodyLeftPx = clampedLeft; bodyTopPx = clampedTop;
     }
     frameBody.style.left = bodyLeftPx+"px"; frameBody.style.top = bodyTopPx+"px";
     frameBody.style.width = bodyBoxWPx+"px"; frameBody.style.height = bodyBoxHPx+"px";
@@ -3098,11 +3119,7 @@ function buildSlideDOM(s, idx, editable, W){
       attachTextDrag(bHandle, frameBody, s, "bodyOffsetX", "bodyOffsetY", W, H);
       frameBody.appendChild(bHandle);
 
-      const bResizeHandle = document.createElement("div");
-      bResizeHandle.className = "text-resize-handle";
-      bResizeHandle.title = "Drag to resize support text box";
-      frameBody.appendChild(bResizeHandle);
-      attachBodyResize(bResizeHandle, frameBody, div, s, boxes.body.w, boxes.body.h, pad);
+      addCornerResizeHandles(frameBody, div, s, "bodyBoxWRatio", "bodyBoxHRatio", "bodyOffsetX", "bodyOffsetY", boxes.body.w, boxes.body.h, pad, ()=>fitDetachedBody(div, frameBody, s));
     }
 
     const p = document.createElement("div");
@@ -3433,32 +3450,62 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
   });
 }
 
-/* Resize the text box itself (distinct from repositioning it). Drag from the
-   bottom-right handle to change how much width/height the text has to wrap into.
-   Also clamps so the box's right/bottom edge can never be pushed past the canvas
-   \u2014 same "handle must stay reachable" reasoning as attachTextDrag above. */
-function attachTextResize(handle, frameTextEl, slideDiv, s, availW, availH, pad){
+/* Canva/PowerPoint-style box resize: 4 small square handles sit directly ON the text
+   box's own corners (nw/ne/sw/se) instead of a single dot that only grows the box
+   down-and-right from a fixed top-left. Dragging any corner resizes from THAT corner
+   while the OPPOSITE corner stays anchored in place \u2014 exactly like dragging a text
+   box's corner handle in Canva or PowerPoint. Resizing from a "west" or "north" corner
+   therefore also has to shift the box's own position (offXKey/offYKey), not just its
+   width/height ratio, so the opposite edge visibly doesn't move. Shared by the headline
+   box and the detached support-text box \u2014 which offset/ratio keys and refit function
+   to use are passed in so this one function drives both.
+   `pad` is only used to convert the box's outer w/h (in "availW/availH" units) into the
+   inner content w/h the text actually wraps into (the same -2*pad math buildSlideDOM
+   uses), and `getEl`/`getFrameStyle` read the *current* left/top so a corner drag starts
+   from wherever the box already sits (including any prior move/resize). */
+function attachCornerResize(handle, frameEl, slideDiv, s, corner, ratioWKey, ratioHKey, offXKey, offYKey, availW, availH, pad, refit){
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
-    const startWRatio = s.textBoxWRatio || 1, startHRatio = s.textBoxHRatio || 1;
+    const startWRatio = s[ratioWKey] || 1, startHRatio = s[ratioHKey] || 1;
+    const startOffX = s[offXKey] || 0, startOffY = s[offYKey] || 0;
+    // The box's position ("left"/"top" in CSS) is boxOrigin + offset; recovering boxOrigin
+    // once up front lets us just add the (possibly-changing) offset back in on every move,
+    // the same pattern attachTextDrag/attachBoxDragFromContent use.
+    const baseLeft = (parseFloat(frameEl.style.left)||0) - startOffX;
+    const baseTop = (parseFloat(frameEl.style.top)||0) - startOffY;
     const W = parseFloat(slideDiv.style.width), H = parseFloat(slideDiv.style.height);
-    const boxLeft = parseFloat(frameTextEl.style.left)||0, boxTop = parseFloat(frameTextEl.style.top)||0;
-    const maxBoxW = Math.max(40, W - boxLeft - 4), maxBoxH = Math.max(40, H - boxTop - 4);
+    const growRight = corner.indexOf("e") !== -1;   // east handles grow width to the right
+    const growDown = corner.indexOf("s") !== -1;    // south handles grow height downward
     handle.classList.add("dragging");
     try{ handle.setPointerCapture(e.pointerId); }catch(err){}
     const onMove = ev=>{
       ev.preventDefault();
       const dx = ev.clientX-startX, dy = ev.clientY-startY;
-      let wRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
-      let hRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
+      let wRatio = clamp(startWRatio + (growRight?dx:-dx)/availW, 0.3, 1.5);
+      let hRatio = clamp(startHRatio + (growDown?dy:-dy)/availH, 0.25, 1.8);
       let boxW = wRatio*availW, boxH = hRatio*availH;
-      if(boxW > maxBoxW){ boxW = maxBoxW; wRatio = boxW/availW; }
-      if(boxH > maxBoxH){ boxH = maxBoxH; hRatio = boxH/availH; }
-      s.textBoxWRatio = wRatio; s.textBoxHRatio = hRatio;
-      frameTextEl.style.width = Math.max(10, boxW-2*pad)+"px";
-      frameTextEl.style.height = Math.max(10, boxH-2*pad)+"px";
-      fitText(slideDiv, frameTextEl, s);
+      // A "west"/"north" handle keeps the OPPOSITE (east/south) edge fixed by moving the
+      // box's own left/top the same amount its width/height grew; an "east"/"south" handle
+      // keeps left/top exactly where they started (that edge doesn't move).
+      let newOffX = startOffX, newOffY = startOffY;
+      if(!growRight) newOffX = startOffX - (boxW - startWRatio*availW);
+      if(!growDown) newOffY = startOffY - (boxH - startHRatio*availH);
+      // Keep the box fully on-canvas: clamp its resulting left/top edge to >=0 and its
+      // right/bottom edge to <=W/H (same reachability guarantee the old single handle had).
+      const left = baseLeft+newOffX, top = baseTop+newOffY;
+      if(left < 0){ const shrink = -left; boxW = Math.max(availW*0.3, boxW-shrink); wRatio = boxW/availW; newOffX += shrink; }
+      if(top < 0){ const shrink = -top; boxH = Math.max(availH*0.25, boxH-shrink); hRatio = boxH/availH; newOffY += shrink; }
+      const right = baseLeft+newOffX+Math.max(10,boxW-2*pad), bottom = baseTop+newOffY+Math.max(10,boxH-2*pad);
+      if(right > W){ boxW = Math.max(availW*0.3, boxW-(right-W)); wRatio = boxW/availW; }
+      if(bottom > H){ boxH = Math.max(availH*0.25, boxH-(bottom-H)); hRatio = boxH/availH; }
+      s[ratioWKey] = wRatio; s[ratioHKey] = hRatio;
+      s[offXKey] = newOffX; s[offYKey] = newOffY;
+      frameEl.style.width = Math.max(10, boxW-2*pad)+"px";
+      frameEl.style.height = Math.max(10, boxH-2*pad)+"px";
+      frameEl.style.left = (baseLeft+newOffX)+"px";
+      frameEl.style.top = (baseTop+newOffY)+"px";
+      refit();
     };
     const onUp = ()=>{
       document.removeEventListener("pointermove", onMove);
@@ -3472,42 +3519,15 @@ function attachTextResize(handle, frameTextEl, slideDiv, s, availW, availH, pad)
     document.addEventListener("pointercancel", onUp);
   });
 }
-
-/* Same as attachTextResize, but resizes the detached body box (bodyBoxWRatio/HRatio)
-   and re-fits with fitDetachedBody instead of fitText. Same on-canvas clamp applied. */
-function attachBodyResize(handle, frameBodyEl, slideDiv, s, availW, availH, pad){
-  handle.addEventListener("pointerdown", e=>{
-    e.preventDefault(); e.stopPropagation();
-    const startX = e.clientX, startY = e.clientY;
-    const startWRatio = s.bodyBoxWRatio || 1, startHRatio = s.bodyBoxHRatio || 1;
-    const W = parseFloat(slideDiv.style.width), H = parseFloat(slideDiv.style.height);
-    const boxLeft = parseFloat(frameBodyEl.style.left)||0, boxTop = parseFloat(frameBodyEl.style.top)||0;
-    const maxBoxW = Math.max(40, W - boxLeft - 4), maxBoxH = Math.max(40, H - boxTop - 4);
-    handle.classList.add("dragging");
-    try{ handle.setPointerCapture(e.pointerId); }catch(err){}
-    const onMove = ev=>{
-      ev.preventDefault();
-      const dx = ev.clientX-startX, dy = ev.clientY-startY;
-      let wRatio = clamp(startWRatio + dx/availW, 0.3, 1.5);
-      let hRatio = clamp(startHRatio + dy/availH, 0.25, 1.8);
-      let boxW = wRatio*availW, boxH = hRatio*availH;
-      if(boxW > maxBoxW){ boxW = maxBoxW; wRatio = boxW/availW; }
-      if(boxH > maxBoxH){ boxH = maxBoxH; hRatio = boxH/availH; }
-      s.bodyBoxWRatio = wRatio; s.bodyBoxHRatio = hRatio;
-      frameBodyEl.style.width = Math.max(10, boxW-2*pad)+"px";
-      frameBodyEl.style.height = Math.max(10, boxH-2*pad)+"px";
-      fitDetachedBody(slideDiv, frameBodyEl, s);
-    };
-    const onUp = ()=>{
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      document.removeEventListener("pointercancel", onUp);
-      handle.classList.remove("dragging");
-      commitThumb(state.active);
-    };
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-    document.addEventListener("pointercancel", onUp);
+/* Creates and appends all 4 corner handles for one text box (headline or detached body),
+   wiring each to attachCornerResize with the right offset/ratio keys and refit callback. */
+function addCornerResizeHandles(frameEl, slideDiv, s, ratioWKey, ratioHKey, offXKey, offYKey, availW, availH, pad, refit){
+  ["nw","ne","sw","se"].forEach(corner=>{
+    const h = document.createElement("div");
+    h.className = `text-resize-handle corner-${corner}`;
+    h.title = "Drag to resize this text box";
+    frameEl.appendChild(h);
+    attachCornerResize(h, frameEl, slideDiv, s, corner, ratioWKey, ratioHKey, offXKey, offYKey, availW, availH, pad, refit);
   });
 }
 
