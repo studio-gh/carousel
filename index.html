@@ -213,7 +213,7 @@
   .text-drag-handle.dragging{cursor:grabbing;}
   .slide-overlay{position:absolute; pointer-events:none;} /* background set inline via overlayCSSBackground() so overlayColor can be any hex */
   .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible; pointer-events:none;}
-  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle{ pointer-events:auto; }
+  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle, .frame-text .layer-text-delete, .frame-text .layer-text-content{ pointer-events:auto; }
   .frame-text.box-dragging, .frame-text.box-dragging .slide-heading, .frame-text.box-dragging .slide-body{ cursor:grabbing; }
   .text-resize-handle{
     position:absolute; width:12px; height:12px; border-radius:3px;
@@ -227,6 +227,16 @@
   .text-resize-handle.corner-sw{ left:-6px; bottom:-6px; cursor:nesw-resize; }
   .text-resize-handle.corner-se{ right:-6px; bottom:-6px; cursor:nwse-resize; }
   .text-resize-handle.dragging{ transform:scale(1.2); }
+  .frame-text.layer-text{ outline:1px dashed transparent; }
+  .frame-text.layer-text:hover{ outline-color:rgba(255,173,42,.55); }
+  .layer-text-delete{
+    position:absolute; top:-28px; left:50%; transform:translateX(-50%);
+    width:22px; height:22px; border-radius:50%;
+    background:var(--danger); color:#fff; border:2px solid var(--panel); cursor:pointer;
+    font-size:11px; line-height:1; display:flex; align-items:center; justify-content:center;
+    z-index:7; padding:0;
+  }
+  .layer-text-delete:hover{ transform:translateX(-50%) scale(1.1); }
   .slide-kicker{ font-weight:700; letter-spacing:.08em; text-transform:uppercase; opacity:.7; }
   .frame-text.pos-top{justify-content:flex-start;}
   .frame-text.pos-center{justify-content:center;}
@@ -702,6 +712,25 @@ function blankSlideDefaults(){
     cutoutImage:null, cutoutImageEl:null,
     cutoutScale:1, cutoutOffsetX:0.5, cutoutOffsetY:0.5, cutoutOpacity:100,
     dragLayer:"layer1",
+    // Extra text layers: freeform text boxes independent from headline/body/kicker \u2014
+    // e.g. a cover title on slide 1 that shouldn't have to hijack the headline slot.
+    // Each is its own draggable/resizable/editable box (see blankTextLayer()).
+    textLayers:[],
+  };
+}
+let _textLayerIdSeq = 1;
+/* One "extra text" box: freeform, independent from headline/body/kicker. Position/size
+   are stored the same way the detached body box already is (offsetX/Y + boxWRatio/HRatio,
+   measured against the FULL slide canvas rather than any layout-specific region, since
+   these are meant to be dropped anywhere \u2014 e.g. a cover title in the top area of slide 1). */
+function blankTextLayer(text){
+  return {
+    id: "tl"+(_textLayerIdSeq++),
+    text: text || "Title",
+    offsetX:0, offsetY:0,
+    boxWRatio:0.72, boxHRatio:0.16,
+    fontSizePx:null, color:null, align:"left",
+    tscale:1,
   };
 }
 function defaultSlides(){
@@ -2116,7 +2145,7 @@ function overlayIcon(kind){
 // scrolling into a nested sub-section.
 const sidebarOpenState = {
   deck:true, templates:true, badge:false, safezones:true,
-  layout:true, content:true, image:true, overlay:true, texture:true, cutout:false, logo:false, signature:false, colors:false,
+  layout:true, content:true, extratext:true, image:true, overlay:true, texture:true, cutout:false, logo:false, signature:false, colors:false,
 };
 // icon: small emoji shown before the title, purely for at-a-glance scanning (mirrors the
 // "pick your starting point" clarity from reference sites \u2014 no need to read every label).
@@ -2352,6 +2381,38 @@ function renderSidebar(){
     `:``}`)}
     <div class="empty-hint">Tip: on mobile, editing here is easier than tapping directly on the slide. Click directly on the headline or body in the canvas to edit it too.${uiMode==="slow"?" Drag any of the 4 corner handles on the text box to resize it \u2014 the opposite corner stays put, just like Canva or PowerPoint.":""}</div>
     `, "\u270D\uFE0F")}
+    ${sec("extratext", "Extra text", `
+    <div class="empty-hint" style="margin-top:-2px;">Add standalone text anywhere on the slide \u2014 a cover title, a label, a stat \u2014 without touching the headline or body. Drag or resize it directly on the canvas once added.</div>
+    <div id="textLayersList">
+    ${(s.textLayers||[]).map((tl,li)=>`
+      <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <label style="margin:0;">Text ${li+1}</label>
+          <button class="btn small" data-remove-layer="${tl.id}" title="Remove this text">Remove</button>
+        </div>
+        <textarea data-layer-text="${tl.id}" rows="2" style="${TA_STYLE}">${escapeXML(tl.text||"")}</textarea>
+        <div class="row2" style="margin-top:8px;">
+          <div class="field">
+            <label>Size (px)</label>
+            <input type="number" data-layer-size="${tl.id}" placeholder="${Math.round(ASPECTS[state.aspect].w*0.052)}" min="8" max="300" step="1" value="${tl.fontSizePx!=null?Math.round(tl.fontSizePx):""}">
+          </div>
+          <div class="field">
+            <label>Color</label>
+            ${colorFieldHTML("layerColor"+tl.id, tl.color||s.textColor)}
+          </div>
+        </div>
+        <div class="field">
+          <label>Align</label>
+          <div class="segmented" data-layer-align="${tl.id}">
+            <button data-k="left" class="${(tl.align||"left")==="left"?"active":""}">Left</button>
+            <button data-k="center" class="${tl.align==="center"?"active":""}">Center</button>
+          </div>
+        </div>
+      </div>
+    `).join("")}
+    </div>
+    <button class="btn small full" id="addTextLayerBtn" style="margin-top:10px;">+ Add text</button>
+    `)}
     ${sec("image", "Photo", `
     <div class="field">
       <label>Add multiple photos</label>
@@ -2673,6 +2734,50 @@ function renderSidebar(){
   const bodyInput = document.getElementById("bodyInput");
   bodyInput.oninput = e=>{ s.body = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
   bodyInput.onchange = ()=>commitThumb(state.active);
+
+  // ---- Extra text layers (freeform boxes independent from headline/body/kicker) ----
+  const addTextLayerBtn = document.getElementById("addTextLayerBtn");
+  if(addTextLayerBtn) addTextLayerBtn.onclick = ()=>{
+    if(!s.textLayers) s.textLayers = [];
+    // Stagger each new layer's default spot a bit so adding several in a row doesn't
+    // pile every box in the exact same place.
+    const n = s.textLayers.length;
+    const tl = blankTextLayer("Title");
+    tl.offsetY = n*30;
+    s.textLayers.push(tl);
+    renderAll();
+  };
+  document.querySelectorAll("[data-remove-layer]").forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.dataset.removeLayer;
+      s.textLayers = (s.textLayers||[]).filter(x=>x.id!==id);
+      renderAll();
+    };
+  });
+  (s.textLayers||[]).forEach(tl=>{
+    const ta = document.querySelector(`[data-layer-text="${tl.id}"]`);
+    if(ta){
+      ta.oninput = e=>{ tl.text = e.target.value; renderStage(); scheduleThumbCommit(state.active); };
+      ta.onchange = ()=>commitThumb(state.active);
+    }
+    const sizeInp = document.querySelector(`[data-layer-size="${tl.id}"]`);
+    if(sizeInp){
+      sizeInp.oninput = e=>{
+        const v = e.target.value.trim();
+        tl.fontSizePx = v==="" ? null : clamp(+v, 8, 300);
+        renderStage();
+      };
+      sizeInp.onchange = ()=>commitThumb(state.active);
+    }
+    wireColorField("layerColor"+tl.id, v=>{ tl.color=v; renderStage(); }, ()=>commitThumb(state.active));
+    document.querySelectorAll(`[data-layer-align="${tl.id}"] button`).forEach(b=>{
+      b.onclick = ()=>{
+        tl.align = b.dataset.k;
+        document.querySelectorAll(`[data-layer-align="${tl.id}"] button`).forEach(x=>x.classList.toggle("active", x===b));
+        renderStage(); commitThumb(state.active);
+      };
+    });
+  });
   const headSizeInput = document.getElementById("headSizeInput");
   if(headSizeInput){
     headSizeInput.oninput = e=>{
@@ -3135,6 +3240,73 @@ function buildSlideDOM(s, idx, editable, W){
     div.appendChild(frameBody);
   }
 
+  // Extra text layers: freeform text boxes independent from headline/body/kicker (e.g. a
+  // cover title on slide 1). Measured against the FULL canvas (W,H), not any layout-specific
+  // region, since these can be dropped anywhere. Reuses the exact same drag/resize/self-heal
+  // functions as the detached body box above \u2014 they just take the layer object itself
+  // (`tl`) in place of the slide (`s`), since all they ever do is read/write offsetX/Y and
+  // boxWRatio/HRatio on whatever object they're given.
+  (s.textLayers||[]).forEach(tl=>{
+    if(!tl.text && !editable) return; // nothing to show in a static/export render if empty
+    const layerBoxWPx = Math.max(10, (tl.boxWRatio||0.72)*W - 2*pad);
+    const layerBoxHPx = Math.max(10, (tl.boxHRatio||0.16)*H - 2*pad);
+    let layerLeftPx = pad+(tl.offsetX||0), layerTopPx = pad+(tl.offsetY||0);
+    // Same "editable-only self-heal" fix as the headline/body boxes: only ever write the
+    // on-canvas correction back into the layer's own data from the real editable stage,
+    // never from a thumbnail (W=220) or Story preview render.
+    {
+      const maxLeft = Math.max(0, W-layerBoxWPx), maxTop = Math.max(0, H-layerBoxHPx);
+      const clampedLeft = clamp(layerLeftPx, 0, maxLeft), clampedTop = clamp(layerTopPx, 0, maxTop);
+      if(editable){
+        if(clampedLeft!==layerLeftPx) tl.offsetX = (tl.offsetX||0) + (clampedLeft-layerLeftPx);
+        if(clampedTop!==layerTopPx) tl.offsetY = (tl.offsetY||0) + (clampedTop-layerTopPx);
+      }
+      layerLeftPx = clampedLeft; layerTopPx = clampedTop;
+    }
+    const frameLayer = document.createElement("div");
+    frameLayer.className = `frame-text layer-text pos-center align-${tl.align||"left"}`;
+    frameLayer.style.left = layerLeftPx+"px"; frameLayer.style.top = layerTopPx+"px";
+    frameLayer.style.width = layerBoxWPx+"px"; frameLayer.style.height = layerBoxHPx+"px";
+
+    if(editable){
+      const handle = document.createElement("div");
+      handle.className = "text-drag-handle";
+      handle.innerHTML = "&#10021;";
+      attachTextDrag(handle, frameLayer, tl, "offsetX", "offsetY", W, H);
+      frameLayer.appendChild(handle);
+
+      addCornerResizeHandles(frameLayer, div, tl, "boxWRatio", "boxHRatio", "offsetX", "offsetY", W, H, pad, ()=>fitTextLayerBox(div, frameLayer, tl, W));
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "layer-text-delete";
+      delBtn.title = "Remove this text";
+      delBtn.innerHTML = "&#10005;";
+      delBtn.addEventListener("pointerdown", e=>e.stopPropagation());
+      delBtn.addEventListener("click", e=>{
+        e.stopPropagation();
+        s.textLayers = (s.textLayers||[]).filter(x=>x.id!==tl.id);
+        renderAll();
+      });
+      frameLayer.appendChild(delBtn);
+    }
+
+    const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+    const el = document.createElement("div");
+    el.className = "slide-heading layer-text-content";
+    el.style.color = tl.color || s.textColor;
+    el.style.fontFamily = fp.headFont; el.style.fontWeight = state.headWeight; el.style.lineHeight = "1.15";
+    el.style.fontSize = (basePx*(tl.tscale||1))+"px";
+    el.contentEditable = editable ? "true" : "false"; el.spellcheck = false; el.innerText = tl.text||"";
+    if(editable){
+      el.addEventListener("input", ()=>{ tl.text = el.innerText; fitTextLayerBox(div, frameLayer, tl, W); scheduleThumbCommit(idx); });
+      el.addEventListener("blur", ()=>{ tl.text = el.innerText; commitThumb(idx); });
+      attachBoxDragFromContent(el, frameLayer, tl, "offsetX", "offsetY", W, H);
+    }
+    frameLayer.appendChild(el);
+    div.appendChild(frameLayer);
+  });
+
   // Cutout: rendered AFTER text (frameText/frameBody above) so it sits visually in front of
   // it \u2014 the "subject in front of text" effect. Only makes sense for "full" layout, where
   // the image box and text box are the same region (see getBoxes); gated in the sidebar too.
@@ -3286,6 +3458,22 @@ function fitDetachedBody(slideDiv, frameBody, s){
     const W = parseFloat(slideDiv.style.width);
     const ts = textSizes(W, s);
     body.style.fontSize = ts.bodyPx+"px";
+    tries++;
+  }
+}
+
+/* Same auto-shrink logic as fitDetachedBody, but for a freeform "extra text" layer
+   (see blankTextLayer). basePx is the font size at the CURRENT slide width W, so
+   this works whether the layer uses its own fontSizePx override or the default W*0.052. */
+function fitTextLayerBox(slideDiv, frameLayer, tl, W){
+  tl.tscale = 1;
+  const el = frameLayer.querySelector(".layer-text-content");
+  if(!el) return;
+  const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+  let tries = 0;
+  while(el.scrollHeight > frameLayer.clientHeight + 1 && tl.tscale > 0.3 && tries < 60){
+    tl.tscale -= 0.02;
+    el.style.fontSize = (basePx*tl.tscale)+"px";
     tries++;
   }
 }
@@ -3905,6 +4093,25 @@ async function renderSlideCanvas(s, idx, animMs){
     ctx.restore();
   }
 
+  // Extra text layers: same freeform boxes as the DOM path, measured against the full W,H.
+  (s.textLayers||[]).forEach(tl=>{
+    if(!tl.text || !tl.text.trim()) return;
+    const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
+    const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
+    const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+    const lFit = fitSingleToHeight(ctx, tl.text, state.headWeight, fp.headName, basePx, 1.15, availWL, availHL);
+    const lLines = lFit.lines, lLH = lFit.lh;
+    const lBlockH = lLines.length*lLH;
+    const lTop = pad + (tl.offsetY||0), lLeft = pad + (tl.offsetX||0);
+    const lStartY = lTop + Math.max(0, (availHL-lBlockH)/2);
+    const align = tl.align||"left";
+    const lx = align==="center" ? lLeft + availWL/2 : lLeft;
+    ctx.textAlign = align==="center" ? "center" : "left";
+    ctx.fillStyle = tl.color || s.textColor;
+    ctx.font = `${state.headWeight} ${lFit.px}px "${fp.headName}"`;
+    lLines.forEach((line,i)=>{ ctx.fillText(line, lx, lStartY + i*lLH); });
+  });
+
   // Cutout: drawn AFTER all text above, so it lands in front of it in the exported image too
   // \u2014 same "subject in front of text" effect and same full-bleed-only gating as the DOM path.
   if((s.layout||"full")==="full" && s.cutoutImage){
@@ -4344,6 +4551,26 @@ async function buildSlideSVG(s, idx){
     dBodyLines.forEach((line,i)=>{ body += `<tspan x="${bx}" ${i===0?"":`dy="${dBodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
     body += `</text>`;
   }
+
+  // Extra text layers: same freeform boxes as the DOM/Canvas paths, measured against W,H.
+  (s.textLayers||[]).forEach(tl=>{
+    if(!tl.text || !tl.text.trim()) return;
+    const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
+    const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
+    const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+    const lFit = fitSingleToHeight(mctx, tl.text, state.headWeight, fp.headName, basePx, 1.15, availWL, availHL);
+    const lLines = lFit.lines, lLH = lFit.lh;
+    const lBlockH = lLines.length*lLH;
+    const lTop = pad + (tl.offsetY||0), lLeft = pad + (tl.offsetX||0);
+    const lStartY = lTop + Math.max(0, (availHL-lBlockH)/2);
+    const align = tl.align||"left";
+    const lx = align==="center" ? lLeft + availWL/2 : lLeft;
+    const lAnchor = align==="center" ? "middle" : "start";
+    const lColor = tl.color || s.textColor;
+    body += `<text x="${lx.toFixed(1)}" y="${(lStartY + lFit.px*0.86).toFixed(1)}" font-family="${fp.headName}" font-weight="${state.headWeight}" font-size="${lFit.px.toFixed(1)}" fill="${lColor}" text-anchor="${lAnchor}">`;
+    lLines.forEach((line,i)=>{ body += `<tspan x="${lx.toFixed(1)}" ${i===0?"":`dy="${lLH}"`}>${escapeXML(line||" ")}</tspan>`; });
+    body += `</text>`;
+  });
 
   // Cutout: appended AFTER all text markup above, so it stacks in front of it \u2014 same
   // full-bleed-only gating and same box as the DOM/Canvas paths.
