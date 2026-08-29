@@ -213,7 +213,7 @@
   .text-drag-handle.dragging{cursor:grabbing;}
   .slide-overlay{position:absolute; pointer-events:none;} /* background set inline via overlayCSSBackground() so overlayColor can be any hex */
   .frame-text{position:absolute; display:flex; flex-direction:column; overflow:visible; pointer-events:none;}
-  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle, .frame-text .layer-text-delete, .frame-text .layer-text-content{ pointer-events:auto; }
+  .frame-text .slide-heading, .frame-text .slide-body, .frame-text .text-drag-handle, .frame-text .text-resize-handle, .frame-text .text-reset-handle, .frame-text .layer-text-delete, .frame-text .layer-text-content{ pointer-events:auto; }
   .frame-text.box-dragging, .frame-text.box-dragging .slide-heading, .frame-text.box-dragging .slide-body{ cursor:grabbing; }
   .text-resize-handle{
     position:absolute; width:12px; height:12px; border-radius:3px;
@@ -227,6 +227,28 @@
   .text-resize-handle.corner-sw{ left:-6px; bottom:-6px; cursor:nesw-resize; }
   .text-resize-handle.corner-se{ right:-6px; bottom:-6px; cursor:nwse-resize; }
   .text-resize-handle.dragging{ transform:scale(1.2); }
+  /* Edge handles (single-axis resize: only width OR only height) sit centered on their
+     own side of the box, same square style as the 4 corner handles. */
+  .text-resize-handle.edge-n{ left:50%; top:-6px; transform:translateX(-50%); cursor:ns-resize; }
+  .text-resize-handle.edge-s{ left:50%; bottom:-6px; transform:translateX(-50%); cursor:ns-resize; }
+  .text-resize-handle.edge-e{ top:50%; right:-6px; transform:translateY(-50%); cursor:ew-resize; }
+  .text-resize-handle.edge-w{ top:50%; left:-6px; transform:translateY(-50%); cursor:ew-resize; }
+  .text-resize-handle.edge-n.dragging{ transform:translateX(-50%) scale(1.2); }
+  .text-resize-handle.edge-s.dragging{ transform:translateX(-50%) scale(1.2); }
+  .text-resize-handle.edge-e.dragging{ transform:translateY(-50%) scale(1.2); }
+  .text-resize-handle.edge-w.dragging{ transform:translateY(-50%) scale(1.2); }
+  .text-reset-handle{
+    position:absolute; top:4px; left:32px; width:24px; height:24px; border-radius:50%;
+    background:var(--surface); color:var(--ink); border:1px solid var(--line-strong);
+    cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center;
+    z-index:5; padding:0; line-height:1;
+  }
+  .text-reset-handle:hover{ background:var(--surface-hover); }
+  /* Smart guides: thin lines that only appear while dragging a text box, when its center
+     lines up with the slide's own horizontal/vertical center. */
+  .center-guide-v, .center-guide-h{ position:absolute; background:var(--accent-ui); z-index:8; display:none; pointer-events:none; }
+  .center-guide-v{ top:0; bottom:0; width:1.5px; left:50%; transform:translateX(-50%); }
+  .center-guide-h{ left:0; right:0; height:1.5px; top:50%; transform:translateY(-50%); }
   .frame-text.layer-text{ outline:1px dashed transparent; }
   .frame-text.layer-text:hover{ outline-color:rgba(255,173,42,.55); }
   .layer-text-delete{
@@ -719,6 +741,7 @@ function blankSlideDefaults(){
   };
 }
 let _textLayerIdSeq = 1;
+const TEXT_LAYER_DEFAULT_W_RATIO = 0.72, TEXT_LAYER_DEFAULT_H_RATIO = 0.16;
 /* One "extra text" box: freeform, independent from headline/body/kicker. Position/size
    are stored the same way the detached body box already is (offsetX/Y + boxWRatio/HRatio,
    measured against the FULL slide canvas rather than any layout-specific region, since
@@ -728,7 +751,7 @@ function blankTextLayer(text){
     id: "tl"+(_textLayerIdSeq++),
     text: text || "Title",
     offsetX:0, offsetY:0,
-    boxWRatio:0.72, boxHRatio:0.16,
+    boxWRatio:TEXT_LAYER_DEFAULT_W_RATIO, boxHRatio:TEXT_LAYER_DEFAULT_H_RATIO,
     fontSizePx:null, color:null, align:"left",
     tscale:1,
   };
@@ -3152,6 +3175,7 @@ function buildSlideDOM(s, idx, editable, W){
     frameText.appendChild(handle);
 
     addCornerResizeHandles(frameText, div, s, "textBoxWRatio", "textBoxHRatio", "textOffsetX", "textOffsetY", boxes.text.w, boxes.text.h, pad, ()=>fitText(div, frameText, s));
+    addResetButton(frameText, s, "textOffsetX", "textOffsetY", "textBoxWRatio", "textBoxHRatio", 1, 1);
   }
 
   if(s.kicker && s.kicker.trim()){
@@ -3225,6 +3249,7 @@ function buildSlideDOM(s, idx, editable, W){
       frameBody.appendChild(bHandle);
 
       addCornerResizeHandles(frameBody, div, s, "bodyBoxWRatio", "bodyBoxHRatio", "bodyOffsetX", "bodyOffsetY", boxes.body.w, boxes.body.h, pad, ()=>fitDetachedBody(div, frameBody, s));
+      addResetButton(frameBody, s, "bodyOffsetX", "bodyOffsetY", "bodyBoxWRatio", "bodyBoxHRatio", 1, 1);
     }
 
     const p = document.createElement("div");
@@ -3276,6 +3301,7 @@ function buildSlideDOM(s, idx, editable, W){
       frameLayer.appendChild(handle);
 
       addCornerResizeHandles(frameLayer, div, tl, "boxWRatio", "boxHRatio", "offsetX", "offsetY", W, H, pad, ()=>fitTextLayerBox(div, frameLayer, tl, W));
+      addResetButton(frameLayer, tl, "offsetX", "offsetY", "boxWRatio", "boxHRatio", TEXT_LAYER_DEFAULT_W_RATIO, TEXT_LAYER_DEFAULT_H_RATIO);
 
       const delBtn = document.createElement("button");
       delBtn.type = "button";
@@ -3543,22 +3569,96 @@ function onImageDragEnd(){
    until the handle landed outside the slide's clipped area and became permanently
    unreachable except via Undo. Keeping the whole box on-canvas means its corner,
    and therefore the handle sitting right at that corner, can never do that. */
+/* ---------- Smart guides (center-alignment snap) ----------
+   Purely visual + a small position nudge during drag: when a box's center crosses within
+   SNAP px of the slide's own horizontal/vertical center, snap it exactly there and show a
+   thin guide line. Shared by every drag path (handle-drag and click-drag-on-content) for
+   the headline, the detached body box, and every extra text layer. */
+const CENTER_SNAP_PX = 8;
+function ensureCenterGuides(slideEl){
+  if(!slideEl) return null;
+  let v = slideEl.querySelector(".center-guide-v"), h = slideEl.querySelector(".center-guide-h");
+  if(!v){ v = document.createElement("div"); v.className = "center-guide-v"; slideEl.appendChild(v); }
+  if(!h){ h = document.createElement("div"); h.className = "center-guide-h"; slideEl.appendChild(h); }
+  return {v, h};
+}
+function hideCenterGuides(slideEl){
+  const g = ensureCenterGuides(slideEl);
+  if(!g) return;
+  g.v.style.display = "none"; g.h.style.display = "none";
+}
+function applyCenterSnap(slideEl, left, top, boxW, boxH, W, H){
+  const centerX = left+boxW/2, centerY = top+boxH/2;
+  const snapX = Math.abs(centerX-W/2) < CENTER_SNAP_PX, snapY = Math.abs(centerY-H/2) < CENTER_SNAP_PX;
+  const g = ensureCenterGuides(slideEl);
+  if(g){ g.v.style.display = snapX?"block":"none"; g.h.style.display = snapY?"block":"none"; }
+  return { left: snapX ? W/2-boxW/2 : left, top: snapY ? H/2-boxH/2 : top };
+}
+
+/* ---------- Keyboard nudge (arrow keys move the last-touched text box) ----------
+   selectedTextBox tracks whichever headline/body/extra-text box was last dragged or
+   resized, so arrow keys can nudge it by 1px (Shift = 10px) without needing a separate
+   click-to-select model. Guarded so it never hijacks arrow keys while actually typing
+   (any focused input/textarea/contentEditable) or after switching to a different slide. */
+let selectedTextBox = null; // {obj, offXKey, offYKey, slideIdx}
+document.addEventListener("keydown", e=>{
+  if(!selectedTextBox) return;
+  if(state.active !== selectedTextBox.slideIdx) return;
+  const ae = document.activeElement, tag = ae ? ae.tagName : "";
+  if(ae && (ae.isContentEditable || tag==="INPUT" || tag==="TEXTAREA" || tag==="SELECT")) return;
+  const dirs = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
+  const d = dirs[e.key];
+  if(!d) return;
+  e.preventDefault();
+  const step = e.shiftKey ? 10 : 1;
+  const {obj, offXKey, offYKey} = selectedTextBox;
+  obj[offXKey] = (obj[offXKey]||0) + d[0]*step;
+  obj[offYKey] = (obj[offYKey]||0) + d[1]*step;
+  renderStage();
+  scheduleThumbCommit(state.active);
+});
+
+/* Small circular button next to the drag handle that resets a box back to its default
+   position AND size in one click \u2014 for when a drag/resize goes somewhere unintended.
+   Shared by the headline box, the detached body box, and every extra text layer. */
+function addResetButton(frameEl, s, offXKey, offYKey, ratioWKey, ratioHKey, defaultWRatio, defaultHRatio){
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "text-reset-handle";
+  btn.title = "Reset position & size";
+  btn.innerHTML = "&#8635;";
+  btn.addEventListener("pointerdown", e=>e.stopPropagation());
+  btn.addEventListener("click", e=>{
+    e.stopPropagation();
+    s[offXKey] = 0; s[offYKey] = 0;
+    if(ratioWKey) s[ratioWKey] = defaultWRatio;
+    if(ratioHKey) s[ratioHKey] = defaultHRatio;
+    renderAll();
+  });
+  frameEl.appendChild(btn);
+}
+
+
 function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
+    selectedTextBox = {obj:s, offXKey, offYKey, slideIdx: state.active};
     const startX = e.clientX, startY = e.clientY;
     const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
     const startLeft = parseFloat(moveEl.style.left)||0, startTop = parseFloat(moveEl.style.top)||0;
     const naturalLeft = startLeft - baseOffX, naturalTop = startTop - baseOffY;
     const boxW = moveEl.offsetWidth, boxH = moveEl.offsetHeight;
     const maxLeft = Math.max(0, W - boxW), maxTop = Math.max(0, H - boxH);
+    const slideEl = moveEl.parentElement;
     let dx = 0, dy = 0;
     handle.classList.add("dragging");
     try{ handle.setPointerCapture(e.pointerId); }catch(err){}
     const onMove = ev=>{
       ev.preventDefault();
-      const clampedLeft = clamp(startLeft + (ev.clientX-startX), 0, maxLeft);
-      const clampedTop = clamp(startTop + (ev.clientY-startY), 0, maxTop);
+      let clampedLeft = clamp(startLeft + (ev.clientX-startX), 0, maxLeft);
+      let clampedTop = clamp(startTop + (ev.clientY-startY), 0, maxTop);
+      const snapped = applyCenterSnap(slideEl, clampedLeft, clampedTop, boxW, boxH, W, H);
+      clampedLeft = snapped.left; clampedTop = snapped.top;
       dx = clampedLeft - startLeft; dy = clampedTop - startTop;
       moveEl.style.transform = `translate(${dx}px, ${dy}px)`;
     };
@@ -3567,6 +3667,7 @@ function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onUp);
       handle.classList.remove("dragging");
+      hideCenterGuides(slideEl);
       s[offXKey] = (startLeft+dx) - naturalLeft;
       s[offYKey] = (startTop+dy) - naturalTop;
       renderStage();
@@ -3589,12 +3690,14 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
   const DRAG_THRESHOLD = 6;
   el.addEventListener("pointerdown", e=>{
     if(document.activeElement === el) return; // already editing \u2014 let native text selection work
+    selectedTextBox = {obj:s, offXKey, offYKey, slideIdx: state.active};
     const startX = e.clientX, startY = e.clientY;
     const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
     const startLeft = parseFloat(moveEl.style.left)||0, startTop = parseFloat(moveEl.style.top)||0;
     const naturalLeft = startLeft - baseOffX, naturalTop = startTop - baseOffY;
     const boxW = moveEl.offsetWidth, boxH = moveEl.offsetHeight;
     const maxLeft = Math.max(0, W - boxW), maxTop = Math.max(0, H - boxH);
+    const slideEl = moveEl.parentElement;
     let dragging = false, dx = 0, dy = 0;
     const onMove = ev=>{
       const rawDx = ev.clientX-startX, rawDy = ev.clientY-startY;
@@ -3611,8 +3714,10 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
       }
       if(dragging){
         ev.preventDefault();
-        const clampedLeft = clamp(startLeft+rawDx, 0, maxLeft);
-        const clampedTop = clamp(startTop+rawDy, 0, maxTop);
+        let clampedLeft = clamp(startLeft+rawDx, 0, maxLeft);
+        let clampedTop = clamp(startTop+rawDy, 0, maxTop);
+        const snapped = applyCenterSnap(slideEl, clampedLeft, clampedTop, boxW, boxH, W, H);
+        clampedLeft = snapped.left; clampedTop = snapped.top;
         dx = clampedLeft-startLeft; dy = clampedTop-startTop;
         moveEl.style.transform = `translate(${dx}px, ${dy}px)`;
       }
@@ -3621,6 +3726,7 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onUp);
+      hideCenterGuides(slideEl);
       if(dragging){
         moveEl.classList.remove("box-dragging");
         s[offXKey] = (startLeft+dx) - naturalLeft;
@@ -3652,8 +3758,11 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
    uses), and `getEl`/`getFrameStyle` read the *current* left/top so a corner drag starts
    from wherever the box already sits (including any prior move/resize). */
 function attachCornerResize(handle, frameEl, slideDiv, s, corner, ratioWKey, ratioHKey, offXKey, offYKey, availW, availH, pad, refit){
+  const hasX = corner.indexOf("e")!==-1 || corner.indexOf("w")!==-1;
+  const hasY = corner.indexOf("n")!==-1 || corner.indexOf("s")!==-1;
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
+    selectedTextBox = {obj:s, offXKey, offYKey, slideIdx: state.active};
     const startX = e.clientX, startY = e.clientY;
     const startWRatio = s[ratioWKey] || 1, startHRatio = s[ratioHKey] || 1;
     const startOffX = s[offXKey] || 0, startOffY = s[offYKey] || 0;
@@ -3669,7 +3778,11 @@ function attachCornerResize(handle, frameEl, slideDiv, s, corner, ratioWKey, rat
     try{ handle.setPointerCapture(e.pointerId); }catch(err){}
     const onMove = ev=>{
       ev.preventDefault();
-      const dx = ev.clientX-startX, dy = ev.clientY-startY;
+      // Single-edge handles (n/s/e/w) only ever affect ONE axis \u2014 zeroing out the other
+      // axis's delta here means the width/height/offset math below naturally leaves that
+      // axis completely untouched, without needing a separate code path for edges.
+      const dx = hasX ? ev.clientX-startX : 0;
+      const dy = hasY ? ev.clientY-startY : 0;
       let wRatio = clamp(startWRatio + (growRight?dx:-dx)/availW, 0.3, 1.5);
       let hRatio = clamp(startHRatio + (growDown?dy:-dy)/availH, 0.25, 1.8);
       let boxW = wRatio*availW, boxH = hRatio*availH;
@@ -3707,13 +3820,15 @@ function attachCornerResize(handle, frameEl, slideDiv, s, corner, ratioWKey, rat
     document.addEventListener("pointercancel", onUp);
   });
 }
-/* Creates and appends all 4 corner handles for one text box (headline or detached body),
-   wiring each to attachCornerResize with the right offset/ratio keys and refit callback. */
+/* Creates and appends all 8 resize handles for one text box (headline or detached body):
+   4 corners (both axes at once) plus 4 edges (one axis only) \u2014 same set Canva/PowerPoint
+   offer. Wires each to attachCornerResize with the right offset/ratio keys and refit callback. */
 function addCornerResizeHandles(frameEl, slideDiv, s, ratioWKey, ratioHKey, offXKey, offYKey, availW, availH, pad, refit){
-  ["nw","ne","sw","se"].forEach(corner=>{
+  const EDGE_CLASS = {n:"edge-n", s:"edge-s", e:"edge-e", w:"edge-w"};
+  ["nw","ne","sw","se","n","s","e","w"].forEach(corner=>{
     const h = document.createElement("div");
-    h.className = `text-resize-handle corner-${corner}`;
-    h.title = "Drag to resize this text box";
+    h.className = `text-resize-handle ${EDGE_CLASS[corner] || "corner-"+corner}`;
+    h.title = EDGE_CLASS[corner] ? "Drag to resize this text box (one direction)" : "Drag to resize this text box";
     frameEl.appendChild(h);
     attachCornerResize(h, frameEl, slideDiv, s, corner, ratioWKey, ratioHKey, offXKey, offYKey, availW, availH, pad, refit);
   });
