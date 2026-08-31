@@ -431,6 +431,23 @@
     border-color:var(--accent-ui); color:var(--accent-ui); outline:none; background:rgba(255,173,42,.06);
   }
   .layer-paste-zone.drag-over{ border-color:var(--accent-ui); background:rgba(255,173,42,.1); }
+  .layers-list{ display:flex; flex-direction:column; gap:4px; }
+  .layer-row{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    padding:7px 8px; font-family:"Inter",sans-serif; font-size:12.5px; color:var(--ink);
+  }
+  .layer-row-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .layer-row-actions{ display:flex; align-items:center; gap:4px; flex-shrink:0; }
+  .layer-row-btn, .layer-row-eye{
+    width:24px; height:24px; border-radius:6px; border:1px solid var(--line); background:var(--panel);
+    color:var(--ink); font-size:12px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    flex-shrink:0; padding:0;
+  }
+  .layer-row-btn:hover, .layer-row-eye:hover{ background:var(--surface-hover); }
+  .layer-row-btn:disabled{ opacity:.3; cursor:not-allowed; }
+  .layer-row-eye.is-hidden{ opacity:.45; }
+  .layer-row.is-hidden-row .layer-row-label{ opacity:.45; text-decoration:line-through; }
   .bulk-photo-dropzone{
     min-height:120px; border:1.5px dashed var(--line-strong); border-radius:10px; padding:12px;
     display:flex; align-items:center; justify-content:center; transition:background .12s ease, border-color .12s ease;
@@ -738,7 +755,56 @@ function blankSlideDefaults(){
     // e.g. a cover title on slide 1 that shouldn't have to hijack the headline slot.
     // Each is its own draggable/resizable/editable box (see blankTextLayer()).
     textLayers:[],
+    // Layers panel: per-slide visibility map, keyed by a stable layer id ("image","layer2",
+    // "overlay","text","body","cutout","logo","badge","signature","swipeHint", or "extra:<id>"
+    // for each extra text layer). Missing/false = visible; true = hidden on this slide only.
+    // Checked identically by buildSlideDOM/renderSlideCanvas/buildSlideSVG so hiding a layer
+    // is consistent across editor, PNG, and SVG exports.
+    layerHidden:{},
+    // Full paint order for this slide (fixed layer keys + "extra:<id>" for each extra text),
+    // written by the Layers panel's up/down buttons. null/absent = use the default order
+    // (see defaultLayerOrderFor/getEffectiveLayerOrder above blankSlideDefaults).
+    layerOrder:null,
   };
+}
+function isLayerHidden(s, key){ return !!(s.layerHidden && s.layerHidden[key]); }
+
+/* ============================= LAYER ORDER (z-order across all 3 renderers) =============
+   Canonical paint order, bottom (painted first) to top (painted last / frontmost). Extra
+   text layers are dynamic (one per s.textLayers entry) so they aren't in this fixed list;
+   defaultLayerOrderFor() splices their current keys in right after "body" when building a
+   fresh default. A slide's actual order is stored in `s.layerOrder` once the person
+   reorders anything via the Layers panel; until then (or for any key that isn't in the
+   stored order yet \u2014 e.g. a newly-added extra text, or a fixed layer that didn't exist
+   when the project was saved) we fall back to / self-heal against this canonical order. */
+const FIXED_LAYER_KEYS = ["image","layer2","overlay","text","body","cutout","badge","signature","swipeHint","logo"];
+function defaultLayerOrderFor(s){
+  const extras = (s.textLayers||[]).map(tl=>"extra:"+tl.id);
+  return ["image","layer2","overlay","text","body", ...extras, "cutout","badge","signature","swipeHint","logo"];
+}
+function getEffectiveLayerOrder(s){
+  const canonical = defaultLayerOrderFor(s);
+  let order = (s.layerOrder && s.layerOrder.length) ? s.layerOrder.slice() : canonical.slice();
+  // Drop extra-text keys whose text layer was since deleted.
+  const validExtras = new Set((s.textLayers||[]).map(tl=>"extra:"+tl.id));
+  order = order.filter(k=> k.indexOf("extra:")===0 ? validExtras.has(k) : true);
+  // Append anything missing (new extra text added since the order was last saved, or a
+  // fixed key that predates this feature) at its canonical spot so nothing silently
+  // fails to render just because it's absent from an old saved order array.
+  canonical.forEach(k=>{ if(order.indexOf(k)===-1) order.push(k); });
+  return Array.from(new Set(order));
+}
+/* Moves `key` one step earlier/later in the slide's layer order (dir=+1 moves it toward
+   the front/top of the stack, dir=-1 moves it toward the back). Writes a full explicit
+   order back into s.layerOrder so the change persists (survives save/load, undo/redo). */
+function moveLayerInOrder(s, key, dir){
+  const order = getEffectiveLayerOrder(s);
+  const i = order.indexOf(key);
+  if(i===-1) return;
+  const j = i + (dir>0 ? 1 : -1);
+  if(j<0 || j>=order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  s.layerOrder = order;
 }
 let _textLayerIdSeq = 1;
 const TEXT_LAYER_DEFAULT_W_RATIO = 0.72, TEXT_LAYER_DEFAULT_H_RATIO = 0.16;
@@ -2168,7 +2234,7 @@ function overlayIcon(kind){
 // scrolling into a nested sub-section.
 const sidebarOpenState = {
   deck:true, templates:true, badge:false, safezones:true,
-  layout:true, content:true, extratext:true, image:true, overlay:true, texture:true, cutout:false, logo:false, signature:false, colors:false,
+  layout:true, content:true, extratext:true, image:true, overlay:true, texture:true, cutout:false, logo:false, signature:false, colors:false, layers:false,
 };
 // icon: small emoji shown before the title, purely for at-a-glance scanning (mirrors the
 // "pick your starting point" clarity from reference sites \u2014 no need to read every label).
@@ -2199,6 +2265,76 @@ function wireSectionToggles(){
       if(body) body.style.display = sidebarOpenState[id] ? "" : "none";
       btn.setAttribute("aria-expanded", sidebarOpenState[id]);
     };
+  });
+}
+
+/* ============================= LAYERS PANEL ============================= */
+/* Metadata (label/icon/existence check) for every FIXED layer key. Extra text layers are
+   dynamic (one per s.textLayers entry) so they're resolved separately in layerMetaFor().
+   The actual stacking order lives in getEffectiveLayerOrder()/s.layerOrder \u2014 this object
+   only supplies what to call a layer and whether it currently has anything to show. */
+const LAYER_META = {
+  image:     {label:"Photo", icon:"\u{1F5BC}\uFE0F", exists:s=>!!s.image},
+  layer2:    {label:"Layer 2 (texture)", icon:"\u{1F32B}\uFE0F", exists:s=>!!s.layer2Image},
+  overlay:   {label:"Overlay (tint)", icon:"\u{1F3A8}", exists:s=>!!s.image && (s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none"},
+  text:      {label:"Headline / kicker / body", icon:"\u{1F524}", exists:s=>true},
+  body:      {label:"Support text (detached)", icon:"\u{1F4DD}", exists:s=>!!s.bodyDetached},
+  cutout:    {label:"Text-behind-subject", icon:"\u{1FA84}", exists:s=>!!s.cutoutImage},
+  badge:     {label:"Page number", icon:"\u0023\uFE0F\u20E3", exists:s=>state.showPageNum},
+  signature: {label:"Signature", icon:"\u{1F516}", exists:s=>!!(s.sigTL||s.sigTR||s.sigBL||s.sigBR)},
+  swipeHint: {label:"Swipe hint (footer)", icon:"\u{27A1}\uFE0F", exists:s=>!!state.showSwipeHint},
+  logo:      {label:"Logo", icon:"\u{1F3F7}\uFE0F", exists:s=>!!s.logoImage},
+};
+function layerMetaFor(s, key){
+  if(key.indexOf("extra:")===0){
+    const tl = (s.textLayers||[]).find(t=>("extra:"+t.id)===key);
+    const raw = tl ? (tl.text||"").trim() : "";
+    const label = raw ? (raw.length>26 ? raw.slice(0,26)+"\u2026" : raw) : "Extra text";
+    return {label, icon:"\u2795", exists: ()=> !!tl};
+  }
+  return LAYER_META[key] || {label:key, icon:"\u2754", exists:()=>false};
+}
+function layerRowHTML(s, key, viIdx, total){
+  const meta = layerMetaFor(s, key);
+  const hidden = isLayerHidden(s, key);
+  return `<div class="layer-row ${hidden?"is-hidden-row":""}" data-key="${key}">
+    <span class="layer-row-label">${meta.icon} ${escapeXML(meta.label)}</span>
+    <div class="layer-row-actions">
+      <button type="button" class="layer-row-btn" data-act="up" data-key="${key}" ${viIdx===0?"disabled":""} title="Bring forward" aria-label="Bring ${escAttr(meta.label)} forward">\u2191</button>
+      <button type="button" class="layer-row-btn" data-act="down" data-key="${key}" ${viIdx===total-1?"disabled":""} title="Send backward" aria-label="Send ${escAttr(meta.label)} backward">\u2193</button>
+      <button type="button" class="layer-row-eye ${hidden?"is-hidden":""}" data-act="toggle" data-key="${key}" title="${hidden?"Show":"Hide"} this layer" aria-label="${hidden?"Show":"Hide"} ${escAttr(meta.label)}">${hidden?"\u{1F648}":"\u{1F441}\uFE0F"}</button>
+    </div>
+  </div>`;
+}
+function layersPanelHTML(s){
+  // Display top-to-bottom = frontmost-to-backmost (reverse of paint order), matching the
+  // layers-panel convention people already know from Canva/Photoshop: the row at the top
+  // of the list is whatever's drawn on top of everything else.
+  const visualOrder = getEffectiveLayerOrder(s).slice().reverse().filter(key=>layerMetaFor(s,key).exists(s));
+  if(!visualOrder.length) return `<div class="empty-hint">Nothing on this slide yet \u2014 add a photo or some text to see layers here.</div>`;
+  const rows = visualOrder.map((key,i)=>layerRowHTML(s, key, i, visualOrder.length)).join("");
+  return `<div class="layers-list" id="layersList">${rows}</div>`;
+}
+function wireLayersPanel(){
+  const list = document.getElementById("layersList");
+  if(!list) return;
+  const s = state.slides[state.active];
+  list.querySelectorAll("[data-act='toggle']").forEach(btn=>{
+    btn.onclick = ()=>{
+      const key = btn.dataset.key;
+      if(!s.layerHidden) s.layerHidden = {};
+      s.layerHidden[key] = !s.layerHidden[key];
+      renderSidebar(); renderStage(); commitThumb(state.active);
+    };
+  });
+  // Visual "up" = toward the front of the stack = later in the actual paint-order array,
+  // so it's a dir=+1 move; visual "down" = toward the back = dir=-1. See layersPanelHTML's
+  // reversed display order above.
+  list.querySelectorAll("[data-act='up']").forEach(btn=>{
+    btn.onclick = ()=>{ moveLayerInOrder(s, btn.dataset.key, +1); renderSidebar(); renderStage(); commitThumb(state.active); };
+  });
+  list.querySelectorAll("[data-act='down']").forEach(btn=>{
+    btn.onclick = ()=>{ moveLayerInOrder(s, btn.dataset.key, -1); renderSidebar(); renderStage(); commitThumb(state.active); };
   });
 }
 
@@ -2611,6 +2747,10 @@ function renderSidebar(){
       <div class="empty-hint" style="margin-top:6px;">Copies the bar text, divider, and color to every slide.</div>
     </div>
     `, "\u{1F516}", !!(s.sigTL||s.sigTR||s.sigBL||s.sigBR))}
+    ${sec("layers", "Layers", `
+    <div class="empty-hint" style="margin-top:-2px;margin-bottom:8px;">Show/hide anything on this slide, or reorder it front-to-back with the arrows (top of the list = drawn on top).</div>
+    ${layersPanelHTML(s)}
+    `, "\u{1F5C2}\uFE0F")}
     ${sec("colors", "Colors", `
     <div class="field">
       <label>Background color</label>
@@ -2633,6 +2773,7 @@ function renderSidebar(){
   if(switchToSlowBtn) switchToSlowBtn.onclick = ()=>setUIMode("slow");
 
   wireSectionToggles();
+  wireLayersPanel();
   document.getElementById("selAspect").onchange = e=>{
     state.aspect=e.target.value;
     if(!availableSafeZonePresets().includes(safeZonePreset)) setSafeZonePreset("universal");
@@ -3066,10 +3207,19 @@ function buildSlideDOM(s, idx, editable, W){
   div.style.width = W+"px"; div.style.height = H+"px";
   div.style.background = s.bgColor;
 
+  // Layers panel support: instead of appending each piece to `div` as soon as it's built
+  // (which used to hardcode the paint order), every layer's DOM node(s) are stashed here
+  // by key and appended in one pass at the very end, in whatever order the Layers panel
+  // has configured for this slide (see getEffectiveLayerOrder()). Existence/visibility are
+  // still decided exactly where they always were (each block below only runs / only stores
+  // into layerEls when the layer has data AND isn't hidden) \u2014 this only changes WHEN the
+  // node gets attached to `div`, not whether it gets built.
+  const layerEls = {};
+
   if(editable) layerLiveRefs = {};
 
-  if(s.image && s.imageEl){
-    const layer2Active = !!(s.layer2Image && s.layer2ImageEl);
+  if(s.image && s.imageEl && !isLayerHidden(s,"image")){
+    const layer2Active = !!(s.layer2Image && s.layer2ImageEl) && !isLayerHidden(s,"layer2");
     const dragLayer1 = !layer2Active || s.dragLayer!=="layer2";
 
     const frameImg = document.createElement("div");
@@ -3084,7 +3234,7 @@ function buildSlideDOM(s, idx, editable, W){
     img.style.left = cb.left+"px"; img.style.top = cb.top+"px";
     img.style.width = cb.dw+"px"; img.style.height = cb.dh+"px";
     frameImg.appendChild(img);
-    div.appendChild(frameImg);
+    layerEls.image = frameImg;
 
     if(editable){
       const r = makeImgRefs(s, "", boxes.image.w, boxes.image.h, s.imageEl.naturalWidth, s.imageEl.naturalHeight);
@@ -3110,7 +3260,7 @@ function buildSlideDOM(s, idx, editable, W){
       img2.style.left = cb2.left+"px"; img2.style.top = cb2.top+"px";
       img2.style.width = cb2.dw+"px"; img2.style.height = cb2.dh+"px";
       frameImg2.appendChild(img2);
-      div.appendChild(frameImg2);
+      layerEls.layer2 = frameImg2;
 
       if(editable){
         const r2 = makeImgRefs(s, "layer2", boxes.image.w, boxes.image.h, s.layer2ImageEl.naturalWidth, s.layer2ImageEl.naturalHeight);
@@ -3123,21 +3273,24 @@ function buildSlideDOM(s, idx, editable, W){
       }
     }
 
-    if((s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none"){
+    if((s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none" && !isLayerHidden(s,"overlay")){
       const ov = document.createElement("div");
       ov.className = "slide-overlay";
       ov.style.left = boxes.image.x+"px"; ov.style.top = boxes.image.y+"px";
       ov.style.width = boxes.image.w+"px"; ov.style.height = boxes.image.h+"px";
       ov.style.borderRadius = ((s.imageRadius||0)*W)+"px";
       ov.style.background = overlayCSSBackground(s.overlayDirection, s.overlayColor||"#000000", (s.overlayOpacity??55)/100);
-      div.appendChild(ov);
+      layerEls.overlay = ov;
     }
   }
 
   const pad = basePad(W);
   const ts = textSizes(W, s);
   const detached = !!s.bodyDetached;
-  const frameText = document.createElement("div");
+  let frameText = null;
+  let frameBody = null;
+  if(!isLayerHidden(s,"text")){
+  frameText = document.createElement("div");
   frameText.className = `frame-text pos-${s.position} align-${s.align}`;
   const textBoxW = (s.textBoxWRatio||1) * boxes.text.w;
   const textBoxH = (s.textBoxHRatio||1) * boxes.text.h;
@@ -3201,7 +3354,6 @@ function buildSlideDOM(s, idx, editable, W){
   }
   frameText.appendChild(h);
 
-  let frameBody = null;
   if(!detached && ((s.body && s.body.trim()!=="") || editable)){
     const p = document.createElement("div");
     p.className = "slide-body"; p.style.color = s.textColor;
@@ -3214,9 +3366,10 @@ function buildSlideDOM(s, idx, editable, W){
     }
     frameText.appendChild(p);
   }
-  div.appendChild(frameText);
+  layerEls.text = frameText;
+  } // end !isLayerHidden(s,"text")
 
-  if(detached && ((s.body && s.body.trim()!=="") || editable)){
+  if(detached && ((s.body && s.body.trim()!=="") || editable) && !isLayerHidden(s,"body")){
     const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     frameBody = document.createElement("div");
     frameBody.className = `frame-text pos-${s.bodyPosition||"top"} align-${bAlign}`;
@@ -3262,7 +3415,7 @@ function buildSlideDOM(s, idx, editable, W){
       attachBoxDragFromContent(p, frameBody, s, "bodyOffsetX", "bodyOffsetY", W, H);
     }
     frameBody.appendChild(p);
-    div.appendChild(frameBody);
+    layerEls.body = frameBody;
   }
 
   // Extra text layers: freeform text boxes independent from headline/body/kicker (e.g. a
@@ -3273,6 +3426,7 @@ function buildSlideDOM(s, idx, editable, W){
   // boxWRatio/HRatio on whatever object they're given.
   (s.textLayers||[]).forEach(tl=>{
     if(!tl.text && !editable) return; // nothing to show in a static/export render if empty
+    if(isLayerHidden(s, "extra:"+tl.id)) return;
     const layerBoxWPx = Math.max(10, (tl.boxWRatio||0.72)*W - 2*pad);
     const layerBoxHPx = Math.max(10, (tl.boxHRatio||0.16)*H - 2*pad);
     let layerLeftPx = pad+(tl.offsetX||0), layerTopPx = pad+(tl.offsetY||0);
@@ -3330,13 +3484,13 @@ function buildSlideDOM(s, idx, editable, W){
       attachBoxDragFromContent(el, frameLayer, tl, "offsetX", "offsetY", W, H);
     }
     frameLayer.appendChild(el);
-    div.appendChild(frameLayer);
+    layerEls["extra:"+tl.id] = frameLayer;
   });
 
   // Cutout: rendered AFTER text (frameText/frameBody above) so it sits visually in front of
   // it \u2014 the "subject in front of text" effect. Only makes sense for "full" layout, where
   // the image box and text box are the same region (see getBoxes); gated in the sidebar too.
-  if((s.layout||"full")==="full" && s.cutoutImage && s.cutoutImageEl){
+  if((s.layout||"full")==="full" && s.cutoutImage && s.cutoutImageEl && !isLayerHidden(s,"cutout")){
     const frameCutout = document.createElement("div");
     frameCutout.className = "frame-image cutout-layer" + (editable ? " editable" : "");
     frameCutout.style.left = boxes.image.x+"px"; frameCutout.style.top = boxes.image.y+"px";
@@ -3349,7 +3503,7 @@ function buildSlideDOM(s, idx, editable, W){
     cimg.style.left = ccb.left+"px"; cimg.style.top = ccb.top+"px";
     cimg.style.width = ccb.dw+"px"; cimg.style.height = ccb.dh+"px";
     frameCutout.appendChild(cimg);
-    div.appendChild(frameCutout);
+    layerEls.cutout = frameCutout;
 
     if(editable){
       const rc = makeImgRefs(s, "cutout", boxes.image.w, boxes.image.h, s.cutoutImageEl.naturalWidth, s.cutoutImageEl.naturalHeight);
@@ -3362,7 +3516,7 @@ function buildSlideDOM(s, idx, editable, W){
     }
   }
 
-  if(state.showPageNum){
+  if(state.showPageNum && !isLayerHidden(s,"badge")){
     const badgePx = W*0.026;
     const badge = document.createElement("div");
     badge.className = "slide-badge";
@@ -3373,14 +3527,14 @@ function buildSlideDOM(s, idx, editable, W){
     badge.style.padding = (W*0.011)+"px "+(W*0.022)+"px";
     badge.style.fontFamily = fp.bodyFont; badge.style.fontSize = badgePx+"px"; badge.style.fontWeight = "700";
     badge.textContent = `${idx+1}/${state.slides.length}`;
-    div.appendChild(badge);
+    layerEls.badge = badge;
   }
 
   const sigColor = s.signatureColor || s.textColor;
   const sigPx = W*0.022;
   const sigPad = W*0.05;
-  const showTopSig = (s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim());
-  const showBottomSig = (s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim());
+  const showTopSig = !isLayerHidden(s,"signature") && ((s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim()));
+  const showBottomSig = !isLayerHidden(s,"signature") && ((s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim()));
   function makeSigRow(edgeProp, leftText, rightText, borderProp, padProp, edgeOffset){
     const row = document.createElement("div");
     row.className = "slide-signature-row";
@@ -3397,7 +3551,7 @@ function buildSlideDOM(s, idx, editable, W){
   }
 
   let swipeHintH = 0;
-  const showSwipeHint = state.showSwipeHint && (state.swipeHintText||"").trim()!=="" && !(state.swipeHintHideLast && idx===state.slides.length-1);
+  const showSwipeHint = state.showSwipeHint && (state.swipeHintText||"").trim()!=="" && !(state.swipeHintHideLast && idx===state.slides.length-1) && !isLayerHidden(s,"swipeHint");
   if(showSwipeHint){
     const hint = document.createElement("div");
     hint.className = "slide-swipe-hint";
@@ -3408,14 +3562,18 @@ function buildSlideDOM(s, idx, editable, W){
     const line = document.createElement("span"); line.className="ssh-line";
     const arrow = document.createElement("span"); arrow.className="ssh-arrow"; arrow.innerHTML = "&#8594;";
     hint.appendChild(label); hint.appendChild(line); hint.appendChild(arrow);
-    div.appendChild(hint);
+    layerEls.swipeHint = hint;
     swipeHintH = (W*0.02)*1.9;
   }
 
-  if(showTopSig) div.appendChild(makeSigRow("top", s.sigTL, s.sigTR, "borderBottom", "paddingBottom"));
-  if(showBottomSig) div.appendChild(makeSigRow("bottom", s.sigBL, s.sigBR, "borderTop", "paddingTop", swipeHintH));
+  if(showTopSig || showBottomSig){
+    const sigEls = [];
+    if(showTopSig) sigEls.push(makeSigRow("top", s.sigTL, s.sigTR, "borderBottom", "paddingBottom"));
+    if(showBottomSig) sigEls.push(makeSigRow("bottom", s.sigBL, s.sigBR, "borderTop", "paddingTop", swipeHintH));
+    layerEls.signature = sigEls;
+  }
 
-  if(s.logoImage && s.logoImageEl){
+  if(s.logoImage && s.logoImageEl && !isLayerHidden(s,"logo")){
     const lw = (s.logoSize||0.16)*W, lh = lw*(s.logoImageEl.naturalHeight/s.logoImageEl.naturalWidth);
     const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
     const logo = document.createElement("img");
@@ -3423,15 +3581,23 @@ function buildSlideDOM(s, idx, editable, W){
     logo.src = s.logoImage;
     logo.style.left = lp.x+"px"; logo.style.top = lp.y+"px";
     logo.style.width = lw+"px"; logo.style.height = lh+"px";
-    div.appendChild(logo);
+    layerEls.logo = logo;
   }
+
+  // Append every built layer to the slide now, in the order the Layers panel has
+  // configured for this slide (default order matches how it always painted before).
+  getEffectiveLayerOrder(s).forEach(key=>{
+    const els = layerEls[key];
+    if(!els) return;
+    (Array.isArray(els) ? els : [els]).forEach(el=>div.appendChild(el));
+  });
 
   if(editable && showSafeZones){
     div.insertAdjacentHTML("beforeend", buildSafeZoneOverlayHTML(W, H));
   }
 
   if(editable){
-    requestAnimationFrame(()=>{ fitText(div, frameText, s); if(frameBody) fitDetachedBody(div, frameBody, s); });
+    requestAnimationFrame(()=>{ if(frameText) fitText(div, frameText, s); if(frameBody) fitDetachedBody(div, frameBody, s); });
     const headFontStr = `${fp.headWeight} 16px "${fp.headName}"`;
     const bodyFontStr = `${fp.bodyWeight} 16px "${fp.bodyName}"`;
     if(!document.fonts.check(headFontStr) || !document.fonts.check(bodyFontStr)){
@@ -4076,24 +4242,40 @@ async function renderSlideCanvas(s, idx, animMs){
 
   ctx.fillStyle = s.bgColor; ctx.fillRect(0,0,W,H);
 
-  if(s.image){
-    let img = s.imageEl;
-    if(!img || !img.complete) img = await loadImageEl(s.image);
-    const radiusPx = (s.imageRadius||0)*W;
-    drawImageInBox(ctx, img, boxes.image, s.imageScale||1, s.imageOffsetX, s.imageOffsetY, radiusPx);
+  // Layers panel support: every layer's actual ctx drawing is wrapped in a closure and
+  // stashed into layerPaint by key, then all closures run in one pass at the end in
+  // whatever order the Layers panel has configured (see getEffectiveLayerOrder()). Any
+  // math that OTHER layers depend on for their own layout (e.g. the sig row needing to
+  // know how tall the swipe-hint footer is so it can sit above it) is still computed here,
+  // at build time, same as before \u2014 only the ctx.fillText/drawImage/etc. calls themselves
+  // are deferred, so cross-layer layout math is unaffected by paint order.
+  const layerPaint = {};
+  const textHidden = isLayerHidden(s,"text");
+  const radiusPx = (s.imageRadius||0)*W;
 
-    if(s.layer2Image){
-      let img2 = s.layer2ImageEl;
-      if(!img2 || !img2.complete) img2 = await loadImageEl(s.layer2Image);
-      ctx.save();
-      ctx.globalAlpha = (s.layer2Opacity??60)/100;
-      ctx.globalCompositeOperation = blendToCanvasOp(s.layer2Blend);
-      drawImageInBox(ctx, img2, boxes.image, s.layer2Scale||1, s.layer2OffsetX, s.layer2OffsetY, radiusPx);
-      ctx.restore();
+  if(s.image && !isLayerHidden(s,"image")){
+    layerPaint.image = async ()=>{
+      let img = s.imageEl;
+      if(!img || !img.complete) img = await loadImageEl(s.image);
+      drawImageInBox(ctx, img, boxes.image, s.imageScale||1, s.imageOffsetX, s.imageOffsetY, radiusPx);
+    };
+
+    if(s.layer2Image && !isLayerHidden(s,"layer2")){
+      layerPaint.layer2 = async ()=>{
+        let img2 = s.layer2ImageEl;
+        if(!img2 || !img2.complete) img2 = await loadImageEl(s.layer2Image);
+        ctx.save();
+        ctx.globalAlpha = (s.layer2Opacity??60)/100;
+        ctx.globalCompositeOperation = blendToCanvasOp(s.layer2Blend);
+        drawImageInBox(ctx, img2, boxes.image, s.layer2Scale||1, s.layer2OffsetX, s.layer2OffsetY, radiusPx);
+        ctx.restore();
+      };
     }
 
-    if((s.layout||"full")==="full"){
-      paintOverlayCanvas(ctx, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, radiusPx, s.overlayColor||"#000000");
+    if((s.layout||"full")==="full" && !isLayerHidden(s,"overlay")){
+      layerPaint.overlay = ()=>{
+        paintOverlayCanvas(ctx, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, radiusPx, s.overlayColor||"#000000");
+      };
     }
   }
 
@@ -4136,127 +4318,140 @@ async function renderSlideCanvas(s, idx, animMs){
   const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
   startY += toY;
   const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
-  ctx.textAlign = s.align==="center" ? "center" : "left";
-  ctx.textBaseline = "top";
 
-  let cursorY = startY;
-  if(hasKicker){
-    ctx.font = `700 ${kickerPx}px "${fp.bodyName}"`;
-    ctx.fillStyle = s.kickerColor || s.textColor;
-    ctx.globalAlpha = 0.7;
-    ctx.fillText(s.kicker.toUpperCase(), x, cursorY);
-    ctx.globalAlpha = 1;
-    cursorY += kickerLH + kickerGap;
+  if(!textHidden){
+    layerPaint.text = ()=>{
+      ctx.textAlign = s.align==="center" ? "center" : "left";
+      ctx.textBaseline = "top";
+      let cursorY = startY;
+      if(hasKicker){
+        ctx.font = `700 ${kickerPx}px "${fp.bodyName}"`;
+        ctx.fillStyle = s.kickerColor || s.textColor;
+        ctx.globalAlpha = 0.7;
+        ctx.fillText(s.kicker.toUpperCase(), x, cursorY);
+        ctx.globalAlpha = 1;
+        cursorY += kickerLH + kickerGap;
+      }
+      ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
+      const headAccentColor = s.headAccentColor || DEFAULT_HEAD_ACCENT;
+      ctx.save();
+      ctx.globalAlpha = headAnimState.opacity;
+      ctx.textAlign = "left";
+      const headXRef = x + (headAnimState.dx||0);
+      drawHeadLines.forEach((line,i)=>{
+        if(!line || line.length===0) return;
+        const lineY = cursorY + headAnimState.dy + i*ts.headLH;
+        const {items} = layoutTokenLine(ctx, line, headXRef, s.align);
+        items.forEach(({tok, x:tx, w})=>{
+          if(tok.style==="accent"){ ctx.fillStyle = headAccentColor; ctx.fillText(tok.text, tx, lineY); }
+          else if(tok.style==="outline"){
+            ctx.strokeStyle = s.textColor; ctx.lineWidth = Math.max(1, ts.headPx*0.045);
+            ctx.strokeText(tok.text, tx, lineY);
+          } else if(tok.style==="highlight"){
+            const padX = w*0.08;
+            ctx.fillStyle = headAccentColor;
+            ctx.fillRect(tx-padX, lineY+ts.headLH*0.06, w+2*padX, ts.headLH*0.82);
+            ctx.fillStyle = contrastTextColor(headAccentColor);
+            ctx.fillText(tok.text, tx, lineY);
+          } else { ctx.fillStyle = s.textColor; ctx.fillText(tok.text, tx, lineY); }
+        });
+      });
+      ctx.restore();
+
+      if(hasBody){
+        ctx.save();
+        ctx.globalAlpha = bodyAnimState.opacity;
+        ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
+        const bodyStartY = cursorY + headBlockH + ts.gap;
+        bodyLines.forEach((line,i)=>{ ctx.fillText(line, x + (bodyAnimState.dx||0), bodyStartY + bodyAnimState.dy + i*ts.bodyLH); });
+        ctx.restore();
+      }
+    };
   }
-  ctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
-  const headAccentColor = s.headAccentColor || DEFAULT_HEAD_ACCENT;
-  ctx.save();
-  ctx.globalAlpha = headAnimState.opacity;
-  ctx.textAlign = "left";
-  const headXRef = x + (headAnimState.dx||0);
-  drawHeadLines.forEach((line,i)=>{
-    if(!line || line.length===0) return;
-    const lineY = cursorY + headAnimState.dy + i*ts.headLH;
-    const {items} = layoutTokenLine(ctx, line, headXRef, s.align);
-    items.forEach(({tok, x:tx, w})=>{
-      if(tok.style==="accent"){ ctx.fillStyle = headAccentColor; ctx.fillText(tok.text, tx, lineY); }
-      else if(tok.style==="outline"){
-        ctx.strokeStyle = s.textColor; ctx.lineWidth = Math.max(1, ts.headPx*0.045);
-        ctx.strokeText(tok.text, tx, lineY);
-      } else if(tok.style==="highlight"){
-        const padX = w*0.08;
-        ctx.fillStyle = headAccentColor;
-        ctx.fillRect(tx-padX, lineY+ts.headLH*0.06, w+2*padX, ts.headLH*0.82);
-        ctx.fillStyle = contrastTextColor(headAccentColor);
-        ctx.fillText(tok.text, tx, lineY);
-      } else { ctx.fillStyle = s.textColor; ctx.fillText(tok.text, tx, lineY); }
-    });
-  });
-  ctx.restore();
 
-  if(hasBody){
-    ctx.save();
-    ctx.globalAlpha = bodyAnimState.opacity;
-    ctx.font = `${fp.bodyWeight} ${ts.bodyPx}px "${fp.bodyName}"`;
-    const bodyStartY = cursorY + headBlockH + ts.gap;
-    bodyLines.forEach((line,i)=>{ ctx.fillText(line, x + (bodyAnimState.dx||0), bodyStartY + bodyAnimState.dy + i*ts.bodyLH); });
-    ctx.restore();
-  }
-
-  if(detached && s.body && s.body.trim()!==""){
-    const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
-    const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
-    const bAvailW = bodyBoxW - 2*pad, bAvailH = bodyBoxH - 2*pad;
-    const dFit = fitSingleToHeight(ctx, s.body, fp.bodyWeight, fp.bodyName, ts0.bodyPx, ts0.bodyLH/ts0.bodyPx, bAvailW, bAvailH);
-    const dBodyLines = dFit.lines, dBodyLH = dFit.lh;
-    const dBodyBlockH = dBodyLines.length*dBodyLH;
-    const bTextTop = boxes.body.y + pad, bTextBottom = boxes.body.y + bodyBoxH - pad;
-    let bStartY;
-    if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
-    else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
-    else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
-    const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
-    bStartY += bToY;
-    const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
-    ctx.textAlign = bAlign==="center" ? "center" : "left";
-    ctx.fillStyle = s.textColor;
-    ctx.font = `${fp.bodyWeight} ${dFit.px}px "${fp.bodyName}"`;
-    const dBodyAnimState = animMs!=null ? computeBodyAnimState(s.textAnim||"none", animMs) : {opacity:1, dy:0};
-    ctx.save();
-    ctx.globalAlpha = dBodyAnimState.opacity;
-    dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx + (dBodyAnimState.dx||0), bStartY + dBodyAnimState.dy + i*dBodyLH); });
-    ctx.restore();
+  if(detached && s.body && s.body.trim()!=="" && !isLayerHidden(s,"body")){
+    layerPaint.body = ()=>{
+      const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
+      const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
+      const bAvailW = bodyBoxW - 2*pad, bAvailH = bodyBoxH - 2*pad;
+      const dFit = fitSingleToHeight(ctx, s.body, fp.bodyWeight, fp.bodyName, ts0.bodyPx, ts0.bodyLH/ts0.bodyPx, bAvailW, bAvailH);
+      const dBodyLines = dFit.lines, dBodyLH = dFit.lh;
+      const dBodyBlockH = dBodyLines.length*dBodyLH;
+      const bTextTop = boxes.body.y + pad, bTextBottom = boxes.body.y + bodyBoxH - pad;
+      let bStartY;
+      if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
+      else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
+      else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
+      const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
+      bStartY += bToY;
+      const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
+      ctx.textAlign = bAlign==="center" ? "center" : "left";
+      ctx.fillStyle = s.textColor;
+      ctx.font = `${fp.bodyWeight} ${dFit.px}px "${fp.bodyName}"`;
+      const dBodyAnimState = animMs!=null ? computeBodyAnimState(s.textAnim||"none", animMs) : {opacity:1, dy:0};
+      ctx.save();
+      ctx.globalAlpha = dBodyAnimState.opacity;
+      dBodyLines.forEach((line,i)=>{ ctx.fillText(line, bx + (dBodyAnimState.dx||0), bStartY + dBodyAnimState.dy + i*dBodyLH); });
+      ctx.restore();
+    };
   }
 
   // Extra text layers: same freeform boxes as the DOM path, measured against the full W,H.
   (s.textLayers||[]).forEach(tl=>{
     if(!tl.text || !tl.text.trim()) return;
-    const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
-    const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
-    const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
-    const lFit = fitSingleToHeight(ctx, tl.text, state.headWeight, fp.headName, basePx, 1.15, availWL, availHL);
-    const lLines = lFit.lines, lLH = lFit.lh;
-    const lBlockH = lLines.length*lLH;
-    const lTop = pad + (tl.offsetY||0), lLeft = pad + (tl.offsetX||0);
-    const lStartY = lTop + Math.max(0, (availHL-lBlockH)/2);
-    const align = tl.align||"left";
-    const lx = align==="center" ? lLeft + availWL/2 : lLeft;
-    ctx.textAlign = align==="center" ? "center" : "left";
-    ctx.fillStyle = tl.color || s.textColor;
-    ctx.font = `${state.headWeight} ${lFit.px}px "${fp.headName}"`;
-    lLines.forEach((line,i)=>{ ctx.fillText(line, lx, lStartY + i*lLH); });
+    if(isLayerHidden(s, "extra:"+tl.id)) return;
+    layerPaint["extra:"+tl.id] = ()=>{
+      const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
+      const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
+      const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+      const lFit = fitSingleToHeight(ctx, tl.text, state.headWeight, fp.headName, basePx, 1.15, availWL, availHL);
+      const lLines = lFit.lines, lLH = lFit.lh;
+      const lBlockH = lLines.length*lLH;
+      const lTop = pad + (tl.offsetY||0), lLeft = pad + (tl.offsetX||0);
+      const lStartY = lTop + Math.max(0, (availHL-lBlockH)/2);
+      const align = tl.align||"left";
+      const lx = align==="center" ? lLeft + availWL/2 : lLeft;
+      ctx.textAlign = align==="center" ? "center" : "left";
+      ctx.fillStyle = tl.color || s.textColor;
+      ctx.font = `${state.headWeight} ${lFit.px}px "${fp.headName}"`;
+      lLines.forEach((line,i)=>{ ctx.fillText(line, lx, lStartY + i*lLH); });
+    };
   });
 
-  // Cutout: drawn AFTER all text above, so it lands in front of it in the exported image too
-  // \u2014 same "subject in front of text" effect and same full-bleed-only gating as the DOM path.
-  if((s.layout||"full")==="full" && s.cutoutImage){
-    let cimg = s.cutoutImageEl;
-    if(!cimg || !cimg.complete) cimg = await loadImageEl(s.cutoutImage);
-    ctx.save();
-    ctx.globalAlpha = (s.cutoutOpacity??100)/100;
-    drawImageInBox(ctx, cimg, boxes.image, s.cutoutScale||1, s.cutoutOffsetX, s.cutoutOffsetY, 0);
-    ctx.restore();
+  // Cutout: same full-bleed-only gating as the DOM path.
+  if((s.layout||"full")==="full" && s.cutoutImage && !isLayerHidden(s,"cutout")){
+    layerPaint.cutout = async ()=>{
+      let cimg = s.cutoutImageEl;
+      if(!cimg || !cimg.complete) cimg = await loadImageEl(s.cutoutImage);
+      ctx.save();
+      ctx.globalAlpha = (s.cutoutOpacity??100)/100;
+      drawImageInBox(ctx, cimg, boxes.image, s.cutoutScale||1, s.cutoutOffsetX, s.cutoutOffsetY, 0);
+      ctx.restore();
+    };
   }
 
-  if(state.showPageNum){
-    const label = `${idx+1}/${state.slides.length}`;
-    const badgePx = W*0.026;
-    ctx.font = `700 ${badgePx}px "${fp.bodyName}"`;
-    const textW = ctx.measureText(label).width;
-    const padX = W*0.022, padY = W*0.011;
-    const bw = textW + padX*2, bh = badgePx + padY*2;
-    const bx = W - W*0.05 - bw;
-    const by = state.badgePos==="top" ? W*0.05 : H - W*0.05 - bh;
-    ctx.fillStyle = state.accent;
-    roundRect(ctx, bx, by, bw, bh, bh/2); ctx.fill();
-    ctx.fillStyle = state.badgeTextColor;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(label, bx+bw/2, by+bh/2+1);
+  if(state.showPageNum && !isLayerHidden(s,"badge")){
+    layerPaint.badge = ()=>{
+      const label = `${idx+1}/${state.slides.length}`;
+      const badgePx = W*0.026;
+      ctx.font = `700 ${badgePx}px "${fp.bodyName}"`;
+      const textW = ctx.measureText(label).width;
+      const padX = W*0.022, padY = W*0.011;
+      const bw = textW + padX*2, bh = badgePx + padY*2;
+      const bx = W - W*0.05 - bw;
+      const by = state.badgePos==="top" ? W*0.05 : H - W*0.05 - bh;
+      ctx.fillStyle = state.accent;
+      roundRect(ctx, bx, by, bw, bh, bh/2); ctx.fill();
+      ctx.fillStyle = state.badgeTextColor;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(label, bx+bw/2, by+bh/2+1);
+    };
   }
 
   function drawSwipeHint(){
     if(!state.showSwipeHint) return 0;
     if(state.swipeHintHideLast && idx===state.slides.length-1) return 0;
+    if(isLayerHidden(s,"swipeHint")) return 0;
     const hintPx = W*0.02, hpad = W*0.05;
     const color = state.swipeHintColor || s.textColor;
     const label = (state.swipeHintText||"").toUpperCase();
@@ -4280,7 +4475,12 @@ async function renderSlideCanvas(s, idx, animMs){
     ctx.globalAlpha = 1;
     return hintPx*1.9;
   }
-  const swipeHintH = drawSwipeHint();
+  // Reserved footer height is computed with a pure formula (doesn't need to actually draw
+  // anything to know its own height) so the signature row's vertical offset is correct
+  // regardless of whether swipeHint or signature paints first in the chosen layer order.
+  const swipeHintWillShow = !!(state.showSwipeHint && !(state.swipeHintHideLast && idx===state.slides.length-1) && !isLayerHidden(s,"swipeHint") && (state.swipeHintText||"").trim());
+  const swipeHintH = swipeHintWillShow ? (W*0.02)*1.9 : 0;
+  if(swipeHintWillShow) layerPaint.swipeHint = ()=>{ drawSwipeHint(); };
 
   function drawSigRow(isTop, leftText, rightText, bottomOffset){
     const sigPx = W*0.022, pad = W*0.05;
@@ -4300,17 +4500,29 @@ async function renderSlideCanvas(s, idx, animMs){
     }
     ctx.globalAlpha = 1;
   }
-  const showTopSig = (s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim());
-  const showBottomSig = (s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim());
-  if(showTopSig) drawSigRow(true, s.sigTL, s.sigTR);
-  if(showBottomSig) drawSigRow(false, s.sigBL, s.sigBR, swipeHintH);
+  const showTopSig = !isLayerHidden(s,"signature") && ((s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim()));
+  const showBottomSig = !isLayerHidden(s,"signature") && ((s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim()));
+  if(showTopSig || showBottomSig){
+    layerPaint.signature = ()=>{
+      if(showTopSig) drawSigRow(true, s.sigTL, s.sigTR);
+      if(showBottomSig) drawSigRow(false, s.sigBL, s.sigBR, swipeHintH);
+    };
+  }
 
-  if(s.logoImage){
-    let logoImg = s.logoImageEl;
-    if(!logoImg || !logoImg.complete) logoImg = await loadImageEl(s.logoImage);
-    const lw = (s.logoSize||0.16)*W, lh = lw*(logoImg.naturalHeight/logoImg.naturalWidth);
-    const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
-    ctx.drawImage(logoImg, lp.x, lp.y, lw, lh);
+  if(s.logoImage && !isLayerHidden(s,"logo")){
+    layerPaint.logo = async ()=>{
+      let logoImg = s.logoImageEl;
+      if(!logoImg || !logoImg.complete) logoImg = await loadImageEl(s.logoImage);
+      const lw = (s.logoSize||0.16)*W, lh = lw*(logoImg.naturalHeight/logoImg.naturalWidth);
+      const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
+      ctx.drawImage(logoImg, lp.x, lp.y, lw, lh);
+    };
+  }
+
+  // Paint every built layer now, in the order the Layers panel has configured for this
+  // slide (default order matches how it always painted before this feature existed).
+  for(const key of getEffectiveLayerOrder(s)){
+    if(layerPaint[key]) await layerPaint[key]();
   }
 
   return canvas;
@@ -4548,28 +4760,30 @@ async function buildSlideSVG(s, idx){
   const W = asp.w, H = asp.h;
   const boxes = getBoxes(s.layout||"full", W, H);
   applyImageInset(boxes, s, W);
-  let defs = "", body = "";
+  let defs = "";
+  const layerSVG = {};
+  const bgRectSVG = `<rect width="${W}" height="${H}" fill="${s.bgColor}"/>`;
 
-  body += `<rect width="${W}" height="${H}" fill="${s.bgColor}"/>`;
+  const textHiddenSVG = isLayerHidden(s,"text");
 
-  if(s.image){
+  if(s.image && !isLayerHidden(s,"image")){
     const natW = s.imageEl ? s.imageEl.naturalWidth : W, natH = s.imageEl ? s.imageEl.naturalHeight : H;
     const cb = computeImageBox(natW, natH, boxes.image.w, boxes.image.h, s.imageScale||1, s.imageOffsetX, s.imageOffsetY);
     const clipId = `clip${idx}`;
     const rxPx = (s.imageRadius||0)*W;
     defs += `<clipPath id="${clipId}"><rect x="${boxes.image.x}" y="${boxes.image.y}" width="${boxes.image.w}" height="${boxes.image.h}" rx="${rxPx.toFixed(1)}" ry="${rxPx.toFixed(1)}"/></clipPath>`;
-    body += `<g clip-path="url(#${clipId})"><image href="${s.image}" x="${(boxes.image.x+cb.left).toFixed(1)}" y="${(boxes.image.y+cb.top).toFixed(1)}" width="${cb.dw.toFixed(1)}" height="${cb.dh.toFixed(1)}"/></g>`;
+    layerSVG.image = `<g clip-path="url(#${clipId})"><image href="${s.image}" x="${(boxes.image.x+cb.left).toFixed(1)}" y="${(boxes.image.y+cb.top).toFixed(1)}" width="${cb.dw.toFixed(1)}" height="${cb.dh.toFixed(1)}"/></g>`;
 
-    if(s.layer2Image){
+    if(s.layer2Image && !isLayerHidden(s,"layer2")){
       const nat2W = s.layer2ImageEl ? s.layer2ImageEl.naturalWidth : W, nat2H = s.layer2ImageEl ? s.layer2ImageEl.naturalHeight : H;
       const cb2 = computeImageBox(nat2W, nat2H, boxes.image.w, boxes.image.h, s.layer2Scale||1, s.layer2OffsetX, s.layer2OffsetY);
       const blendAttr = (s.layer2Blend && s.layer2Blend!=="normal") ? ` style="mix-blend-mode:${s.layer2Blend}"` : "";
-      body += `<g clip-path="url(#${clipId})"${blendAttr} opacity="${((s.layer2Opacity??60)/100).toFixed(3)}"><image href="${s.layer2Image}" x="${(boxes.image.x+cb2.left).toFixed(1)}" y="${(boxes.image.y+cb2.top).toFixed(1)}" width="${cb2.dw.toFixed(1)}" height="${cb2.dh.toFixed(1)}"/></g>`;
+      layerSVG.layer2 = `<g clip-path="url(#${clipId})"${blendAttr} opacity="${((s.layer2Opacity??60)/100).toFixed(3)}"><image href="${s.layer2Image}" x="${(boxes.image.x+cb2.left).toFixed(1)}" y="${(boxes.image.y+cb2.top).toFixed(1)}" width="${cb2.dw.toFixed(1)}" height="${cb2.dh.toFixed(1)}"/></g>`;
     }
 
-    if((s.layout||"full")==="full"){
-      const res = overlaySVG(defs, body, boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, `grad${idx}`, clipId, s.overlayColor||"#000000");
-      defs = res.defs; body = res.body;
+    if((s.layout||"full")==="full" && !isLayerHidden(s,"overlay")){
+      const res = overlaySVG(defs, "", boxes.image, s.overlayDirection, (s.overlayOpacity??55)/100, `grad${idx}`, clipId, s.overlayColor||"#000000");
+      defs = res.defs; layerSVG.overlay = res.body;
     }
   }
 
@@ -4605,16 +4819,17 @@ async function buildSlideSVG(s, idx){
   const anchor = s.align==="center" ? "middle" : "start";
 
   let cursorY = startY;
-  if(hasKicker){
-    body += `<text x="${x}" y="${(cursorY+kickerPx*0.86).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${kickerPx.toFixed(1)}" fill="${s.kickerColor||s.textColor}" fill-opacity="0.7" letter-spacing="1.5" text-anchor="${anchor}">${escapeXML(s.kicker.toUpperCase())}</text>`;
-    cursorY += kickerLH + kickerGap;
+  let kickerSVG = "";
+  if(hasKicker && !textHiddenSVG){
+    kickerSVG = `<text x="${x}" y="${(cursorY+kickerPx*0.86).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${kickerPx.toFixed(1)}" fill="${s.kickerColor||s.textColor}" fill-opacity="0.7" letter-spacing="1.5" text-anchor="${anchor}">${escapeXML(s.kicker.toUpperCase())}</text>`;
   }
+  if(hasKicker) cursorY += kickerLH + kickerGap;
 
   const headAccentColor = s.headAccentColor || DEFAULT_HEAD_ACCENT;
   mctx.font = `${fp.headWeight} ${ts.headPx}px "${fp.headName}"`;
   const headSpaceW = mctx.measureText(" ").width;
   let headRects = "", headTspans = "";
-  headLines.forEach((line,i)=>{
+  if(!textHiddenSVG) headLines.forEach((line,i)=>{
     if(!line || line.length===0) return;
     const lineTop = cursorY + i*ts.headLH;
     const lineY = lineTop + ts.headPx*0.86;
@@ -4637,16 +4852,18 @@ async function buildSlideSVG(s, idx){
       headTspans += `<tspan x="${rx.toFixed(1)}" y="${lineY.toFixed(1)}" xml:space="preserve"${fillAttr}>${rtext}</tspan>`;
     });
   });
-  body += headRects + `<text font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" text-anchor="start">${headTspans}</text>`;
+  let headBodySVG = "";
+  if(!textHiddenSVG) headBodySVG += headRects + `<text font-family="${fp.headName}" font-weight="${fp.headWeight}" font-size="${ts.headPx.toFixed(1)}" text-anchor="start">${headTspans}</text>`;
 
-  if(hasBody){
+  if(hasBody && !textHiddenSVG){
     const bodyStartY = cursorY + headBlockH + ts.gap;
-    body += `<text x="${x}" y="${bodyStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
-    bodyLines.forEach((line,i)=>{ body += `<tspan x="${x}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
-    body += `</text>`;
+    headBodySVG += `<text x="${x}" y="${bodyStartY + ts.bodyPx*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${ts.bodyPx.toFixed(1)}" fill="${s.textColor}" text-anchor="${anchor}">`;
+    bodyLines.forEach((line,i)=>{ headBodySVG += `<tspan x="${x}" ${i===0?"":`dy="${ts.bodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
+    headBodySVG += `</text>`;
   }
+  if(!textHiddenSVG) layerSVG.text = kickerSVG + headBodySVG;
 
-  if(detached && s.body && s.body.trim()!==""){
+  if(detached && s.body && s.body.trim()!=="" && !isLayerHidden(s,"body")){
     const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     const bodyBoxW = (s.bodyBoxWRatio||1)*boxes.body.w, bodyBoxH = (s.bodyBoxHRatio||1)*boxes.body.h;
     const bAvailW = bodyBoxW - 2*pad, bAvailH = bodyBoxH - 2*pad;
@@ -4662,14 +4879,16 @@ async function buildSlideSVG(s, idx){
     bStartY += bToY;
     const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
     const bAnchor = bAlign==="center" ? "middle" : "start";
-    body += `<text x="${bx}" y="${bStartY + dFit.px*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${dFit.px.toFixed(1)}" fill="${s.textColor}" text-anchor="${bAnchor}">`;
-    dBodyLines.forEach((line,i)=>{ body += `<tspan x="${bx}" ${i===0?"":`dy="${dBodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
-    body += `</text>`;
+    let out = `<text x="${bx}" y="${bStartY + dFit.px*0.86}" font-family="${fp.bodyName}" font-weight="${fp.bodyWeight}" font-size="${dFit.px.toFixed(1)}" fill="${s.textColor}" text-anchor="${bAnchor}">`;
+    dBodyLines.forEach((line,i)=>{ out += `<tspan x="${bx}" ${i===0?"":`dy="${dBodyLH}"`}>${escapeXML(line||" ")}</tspan>`; });
+    out += `</text>`;
+    layerSVG.body = out;
   }
 
   // Extra text layers: same freeform boxes as the DOM/Canvas paths, measured against W,H.
   (s.textLayers||[]).forEach(tl=>{
     if(!tl.text || !tl.text.trim()) return;
+    if(isLayerHidden(s, "extra:"+tl.id)) return;
     const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
     const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
     const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
@@ -4682,22 +4901,22 @@ async function buildSlideSVG(s, idx){
     const lx = align==="center" ? lLeft + availWL/2 : lLeft;
     const lAnchor = align==="center" ? "middle" : "start";
     const lColor = tl.color || s.textColor;
-    body += `<text x="${lx.toFixed(1)}" y="${(lStartY + lFit.px*0.86).toFixed(1)}" font-family="${fp.headName}" font-weight="${state.headWeight}" font-size="${lFit.px.toFixed(1)}" fill="${lColor}" text-anchor="${lAnchor}">`;
-    lLines.forEach((line,i)=>{ body += `<tspan x="${lx.toFixed(1)}" ${i===0?"":`dy="${lLH}"`}>${escapeXML(line||" ")}</tspan>`; });
-    body += `</text>`;
+    let out = `<text x="${lx.toFixed(1)}" y="${(lStartY + lFit.px*0.86).toFixed(1)}" font-family="${fp.headName}" font-weight="${state.headWeight}" font-size="${lFit.px.toFixed(1)}" fill="${lColor}" text-anchor="${lAnchor}">`;
+    lLines.forEach((line,i)=>{ out += `<tspan x="${lx.toFixed(1)}" ${i===0?"":`dy="${lLH}"`}>${escapeXML(line||" ")}</tspan>`; });
+    out += `</text>`;
+    layerSVG["extra:"+tl.id] = out;
   });
 
-  // Cutout: appended AFTER all text markup above, so it stacks in front of it \u2014 same
-  // full-bleed-only gating and same box as the DOM/Canvas paths.
-  if((s.layout||"full")==="full" && s.cutoutImage){
+  // Cutout: same full-bleed-only gating and same box as the DOM/Canvas paths.
+  if((s.layout||"full")==="full" && s.cutoutImage && !isLayerHidden(s,"cutout")){
     const natCW = s.cutoutImageEl ? s.cutoutImageEl.naturalWidth : W, natCH = s.cutoutImageEl ? s.cutoutImageEl.naturalHeight : H;
     const ccb = computeImageBox(natCW, natCH, boxes.image.w, boxes.image.h, s.cutoutScale||1, s.cutoutOffsetX, s.cutoutOffsetY);
     const cutoutClipId = `cutoutclip${idx}`;
     defs += `<clipPath id="${cutoutClipId}"><rect x="${boxes.image.x}" y="${boxes.image.y}" width="${boxes.image.w}" height="${boxes.image.h}"/></clipPath>`;
-    body += `<g clip-path="url(#${cutoutClipId})" opacity="${((s.cutoutOpacity??100)/100).toFixed(3)}"><image href="${s.cutoutImage}" x="${(boxes.image.x+ccb.left).toFixed(1)}" y="${(boxes.image.y+ccb.top).toFixed(1)}" width="${ccb.dw.toFixed(1)}" height="${ccb.dh.toFixed(1)}"/></g>`;
+    layerSVG.cutout = `<g clip-path="url(#${cutoutClipId})" opacity="${((s.cutoutOpacity??100)/100).toFixed(3)}"><image href="${s.cutoutImage}" x="${(boxes.image.x+ccb.left).toFixed(1)}" y="${(boxes.image.y+ccb.top).toFixed(1)}" width="${ccb.dw.toFixed(1)}" height="${ccb.dh.toFixed(1)}"/></g>`;
   }
 
-  if(state.showPageNum){
+  if(state.showPageNum && !isLayerHidden(s,"badge")){
     const label = `${idx+1}/${state.slides.length}`;
     const badgePx = W*0.026;
     mctx.font = `700 ${badgePx.toFixed(1)}px "${fp.bodyName}"`;
@@ -4706,8 +4925,9 @@ async function buildSlideSVG(s, idx){
     const bw = textW + padX*2, bh = badgePx + padY*2;
     const bx = W - W*0.05 - bw;
     const by = state.badgePos==="top" ? W*0.05 : H - W*0.05 - bh;
-    body += `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="${(bh/2).toFixed(1)}" fill="${state.accent}"/>`;
-    body += `<text x="${(bx+bw/2).toFixed(1)}" y="${(by+bh/2+badgePx*0.35).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${badgePx.toFixed(1)}" fill="${state.badgeTextColor}" text-anchor="middle">${escapeXML(label)}</text>`;
+    let out = `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="${(bh/2).toFixed(1)}" fill="${state.accent}"/>`;
+    out += `<text x="${(bx+bw/2).toFixed(1)}" y="${(by+bh/2+badgePx*0.35).toFixed(1)}" font-family="${fp.bodyName}" font-weight="700" font-size="${badgePx.toFixed(1)}" fill="${state.badgeTextColor}" text-anchor="middle">${escapeXML(label)}</text>`;
+    layerSVG.badge = out;
   }
 
   function sigRowSVG(isTop, leftText, rightText, bottomOffset){
@@ -4727,6 +4947,7 @@ async function buildSlideSVG(s, idx){
   function swipeHintSVG(){
     if(!state.showSwipeHint) return {out:"", h:0};
     if(state.swipeHintHideLast && idx===state.slides.length-1) return {out:"", h:0};
+    if(isLayerHidden(s,"swipeHint")) return {out:"", h:0};
     const label = (state.swipeHintText||"").trim();
     if(!label) return {out:"", h:0};
     const hintPx = W*0.02, hpad = W*0.05;
@@ -4746,19 +4967,28 @@ async function buildSlideSVG(s, idx){
     return {out, h: hintPx*1.9};
   }
   const swipeHint = swipeHintSVG();
-  body += swipeHint.out;
+  if(swipeHint.out) layerSVG.swipeHint = swipeHint.out;
 
-  const showTopSigSVG = (s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim());
-  const showBottomSigSVG = (s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim());
-  if(showTopSigSVG) body += sigRowSVG(true, s.sigTL, s.sigTR);
-  if(showBottomSigSVG) body += sigRowSVG(false, s.sigBL, s.sigBR, swipeHint.h);
+  const showTopSigSVG = !isLayerHidden(s,"signature") && ((s.sigTL && s.sigTL.trim()) || (s.sigTR && s.sigTR.trim()));
+  const showBottomSigSVG = !isLayerHidden(s,"signature") && ((s.sigBL && s.sigBL.trim()) || (s.sigBR && s.sigBR.trim()));
+  if(showTopSigSVG || showBottomSigSVG){
+    let out = "";
+    if(showTopSigSVG) out += sigRowSVG(true, s.sigTL, s.sigTR);
+    if(showBottomSigSVG) out += sigRowSVG(false, s.sigBL, s.sigBR, swipeHint.h);
+    layerSVG.signature = out;
+  }
 
-  if(s.logoImage){
+  if(s.logoImage && !isLayerHidden(s,"logo")){
     const natLW = s.logoImageEl ? s.logoImageEl.naturalWidth : 1, natLH = s.logoImageEl ? s.logoImageEl.naturalHeight : 1;
     const lw = (s.logoSize||0.16)*W, lh = lw*(natLH/natLW);
     const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
-    body += `<image href="${s.logoImage}" x="${lp.x.toFixed(1)}" y="${lp.y.toFixed(1)}" width="${lw.toFixed(1)}" height="${lh.toFixed(1)}"/>`;
+    layerSVG.logo = `<image href="${s.logoImage}" x="${lp.x.toFixed(1)}" y="${lp.y.toFixed(1)}" width="${lw.toFixed(1)}" height="${lh.toFixed(1)}"/>`;
   }
+
+  // Assemble the final body now, in the order the Layers panel has configured for this
+  // slide (default order matches how it always painted before this feature existed). The
+  // background rect always paints first, same as DOM (bgColor) and Canvas (fillRect).
+  let body = bgRectSVG + getEffectiveLayerOrder(s).map(key=>layerSVG[key]||"").join("");
 
   let fontFaceCSS = "";
   try{
