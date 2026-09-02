@@ -91,7 +91,8 @@
   .section-toggle[aria-expanded="true"] .chev{ transform:rotate(180deg); }
   .section-toggle:hover .chev{ color:var(--accent-ui); }
   .section-toggle .sec-title{ display:flex; align-items:center; gap:8px; }
-  .section-toggle .sec-icon{ font-size:15px; line-height:1; flex-shrink:0; }
+  .section-toggle .sec-icon{ font-size:15px; line-height:1; flex-shrink:0; display:inline-flex; align-items:center; }
+  .section-toggle .sec-icon svg{ width:15px; height:15px; }
   .section-toggle .sec-dot{
     width:7px; height:7px; border-radius:50%; background:var(--accent-ui); flex-shrink:0;
     box-shadow:0 0 0 2px var(--accent-ui-soft);
@@ -390,13 +391,18 @@
   .coffee-btn:hover{ transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.4); }
   .coffee-btn:active{ transform:scale(.96); }
   .resume-banner{
-    position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:50;
+    position:fixed; left:50%; top:66px; transform:translateX(-50%); z-index:50;
     background:var(--surface); border:1px solid var(--line); border-radius:10px;
     padding:10px 14px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
     box-shadow:0 6px 20px rgba(0,0,0,.35); font-family:"Inter",sans-serif; font-size:13px; color:var(--ink);
     max-width:min(92vw, 480px);
   }
-  .resume-banner .resume-actions{display:flex; gap:8px; flex-shrink:0;}
+  .resume-banner .resume-actions{display:flex; gap:8px; flex-shrink:0; align-items:center;}
+  .resume-banner .resume-close{
+    background:none; border:none; color:var(--muted); font-size:16px; line-height:1; cursor:pointer;
+    padding:2px 4px; flex-shrink:0; border-radius:5px;
+  }
+  .resume-banner .resume-close:hover{ color:var(--ink); background:var(--surface-hover); }
   .modal-backdrop{display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:60;}
   .modal-backdrop.open{display:block;}
   .import-modal{
@@ -448,6 +454,17 @@
   .layer-row-btn:disabled{ opacity:.3; cursor:not-allowed; }
   .layer-row-eye.is-hidden{ opacity:.45; }
   .layer-row.is-hidden-row .layer-row-label{ opacity:.45; text-decoration:line-through; }
+  .layer-row-label{ cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .layer-row-label:hover{ color:var(--accent-ui); }
+  .layer-row-icon{ flex-shrink:0; width:16px; height:16px; display:flex; align-items:center; justify-content:center; color:var(--muted); cursor:pointer; }
+  .layer-row-icon svg{ width:100%; height:100%; }
+  .layer-row:hover .layer-row-icon{ color:var(--accent-ui); }
+  .layer-row-eye svg{ width:14px; height:14px; }
+  .layer-row.is-selected-row{ border-color:var(--accent-ui); background:var(--accent-ui-soft); }
+  .layer-row.is-selected-row .layer-row-icon{ color:var(--accent-ui); }
+  @keyframes layerFlash{ 0%{ outline-color:var(--accent-ui); } 100%{ outline-color:rgba(255,173,42,0); } }
+  .layer-flash{ outline:3px solid var(--accent-ui); outline-offset:2px; border-radius:4px; animation:layerFlash .9s ease forwards; }
+  .layer-selected{ outline:2px solid var(--accent-ui); outline-offset:2px; border-radius:4px; }
   .bulk-photo-dropzone{
     min-height:120px; border:1.5px dashed var(--line-strong); border-radius:10px; padding:12px;
     display:flex; align-items:center; justify-content:center; transition:background .12s ease, border-color .12s ease;
@@ -2268,41 +2285,66 @@ function wireSectionToggles(){
   });
 }
 
+const ICON_EYE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.5l17 17"/><path d="M10.6 5.7c.45-.1.9-.15 1.4-.15 6 0 9.5 6.5 9.5 6.5s-1 1.85-2.9 3.55M6.6 6.9C4 8.6 2.5 12 2.5 12s3.5 6.5 9.5 6.5c1.3 0 2.5-.3 3.6-.85"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`;
 /* ============================= LAYERS PANEL ============================= */
+/* Small monochrome line-icon set for the layers list (16x16-ish, currentColor stroke) so the
+   panel reads as part of this app's design system instead of relying on emoji, which render
+   inconsistently across OSes and look a little toy-like next to the rest of the UI. */
+const LAYER_ICON_SVG = {
+  image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.2"/><circle cx="8.3" cy="9.3" r="1.5"/><path d="M21 15.5l-5.3-4.8-3.8 3.8-2.3-1.9L3.5 18"/></svg>`,
+  layer2: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.3l8.5 4.7-8.5 4.7-8.5-4.7L12 3.3z"/><path d="M3.5 12.5l8.5 4.7 8.5-4.7"/><path d="M3.5 16.8l8.5 4.7 8.5-4.7"/></svg>`,
+  overlay: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="18" height="17" rx="2.2"/><path d="M3 13.5h18" stroke-opacity="0"/><path d="M4 13.7c1.6-1.4 3-1.9 4.4-1.9 2.6 0 2.6 2.4 5.2 2.4 2 0 3-1 6.4-3.2" opacity=".9"/></svg>`,
+  text: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5h14"/><path d="M12 5.5v13"/><path d="M9 18.5h6"/></svg>`,
+  body: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M4 12h16"/><path d="M4 17.5h10"/></svg>`,
+  extra: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.2"/><path d="M12 9v6M9 12h6"/></svg>`,
+  cutout: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.2" stroke-dasharray="2.6 2.4"/><circle cx="12" cy="9.6" r="2.8"/><path d="M7.2 18.5c1-2.8 2.7-4.2 4.8-4.2s3.8 1.4 4.8 4.2"/></svg>`,
+  badge: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.7"/><path d="M9.3 8.3l-.9 7.4M15.6 8.3l-.9 7.4M7.6 10.6h8.6M7.2 13.7h8.6"/></svg>`,
+  signature: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 16.5c1.8-.8 2.8-2.6 3.2-4.8.4-2.5 1.3-5.4 2.6-5.4s.8 3.6-1 6.2-3.6 4-3.6 4 2.8.9 5.4-.8 3.4-3.6 5.2-1.8 2.1 2.6 4.2 1.8"/></svg>`,
+  swipeHint: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h14.5"/><path d="M14 6.3l6 5.7-6 5.7"/></svg>`,
+  logo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2L12 20 4 12V4h8l8 8.2z"/><circle cx="8.3" cy="8.3" r="1.3" fill="currentColor" stroke="none"/></svg>`,
+};
 /* Metadata (label/icon/existence check) for every FIXED layer key. Extra text layers are
    dynamic (one per s.textLayers entry) so they're resolved separately in layerMetaFor().
    The actual stacking order lives in getEffectiveLayerOrder()/s.layerOrder \u2014 this object
    only supplies what to call a layer and whether it currently has anything to show. */
 const LAYER_META = {
-  image:     {label:"Photo", icon:"\u{1F5BC}\uFE0F", exists:s=>!!s.image},
-  layer2:    {label:"Layer 2 (texture)", icon:"\u{1F32B}\uFE0F", exists:s=>!!s.layer2Image},
-  overlay:   {label:"Overlay (tint)", icon:"\u{1F3A8}", exists:s=>!!s.image && (s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none"},
-  text:      {label:"Headline / kicker / body", icon:"\u{1F524}", exists:s=>true},
-  body:      {label:"Support text (detached)", icon:"\u{1F4DD}", exists:s=>!!s.bodyDetached},
-  cutout:    {label:"Text-behind-subject", icon:"\u{1FA84}", exists:s=>!!s.cutoutImage},
-  badge:     {label:"Page number", icon:"\u0023\uFE0F\u20E3", exists:s=>state.showPageNum},
-  signature: {label:"Signature", icon:"\u{1F516}", exists:s=>!!(s.sigTL||s.sigTR||s.sigBL||s.sigBR)},
-  swipeHint: {label:"Swipe hint (footer)", icon:"\u{27A1}\uFE0F", exists:s=>!!state.showSwipeHint},
-  logo:      {label:"Logo", icon:"\u{1F3F7}\uFE0F", exists:s=>!!s.logoImage},
+  image:     {label:"Photo", icon:LAYER_ICON_SVG.image, exists:s=>!!s.image},
+  layer2:    {label:"Layer 2 (texture)", icon:LAYER_ICON_SVG.layer2, exists:s=>!!s.layer2Image},
+  overlay:   {label:"Overlay (tint)", icon:LAYER_ICON_SVG.overlay, exists:s=>!!s.image && (s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none"},
+  text:      {label:"Headline / kicker / body", icon:LAYER_ICON_SVG.text, exists:s=>true},
+  body:      {label:"Support text (detached)", icon:LAYER_ICON_SVG.body, exists:s=>!!s.bodyDetached},
+  cutout:    {label:"Text-behind-subject", icon:LAYER_ICON_SVG.cutout, exists:s=>!!s.cutoutImage},
+  badge:     {label:"Page number", icon:LAYER_ICON_SVG.badge, exists:s=>state.showPageNum},
+  signature: {label:"Signature", icon:LAYER_ICON_SVG.signature, exists:s=>!!(s.sigTL||s.sigTR||s.sigBL||s.sigBR)},
+  swipeHint: {label:"Swipe hint (footer)", icon:LAYER_ICON_SVG.swipeHint, exists:s=>!!state.showSwipeHint},
+  logo:      {label:"Logo", icon:LAYER_ICON_SVG.logo, exists:s=>!!s.logoImage},
 };
 function layerMetaFor(s, key){
   if(key.indexOf("extra:")===0){
     const tl = (s.textLayers||[]).find(t=>("extra:"+t.id)===key);
     const raw = tl ? (tl.text||"").trim() : "";
     const label = raw ? (raw.length>26 ? raw.slice(0,26)+"\u2026" : raw) : "Extra text";
-    return {label, icon:"\u2795", exists: ()=> !!tl};
+    return {label, icon:LAYER_ICON_SVG.extra, exists: ()=> !!tl};
   }
-  return LAYER_META[key] || {label:key, icon:"\u2754", exists:()=>false};
+  return LAYER_META[key] || {label:key, icon:LAYER_ICON_SVG.extra, exists:()=>false};
 }
+// Which layer (if any) is currently "selected" from the panel \u2014 kept as a persistent
+// highlighted state (not just a momentary flash) so picking a layer feels like an actual
+// selection tool. Cleared on Escape, on clicking elsewhere on the stage, or on switching
+// slides/re-rendering the sidebar for a different slide.
+let selectedLayerKey = null;
 function layerRowHTML(s, key, viIdx, total){
   const meta = layerMetaFor(s, key);
   const hidden = isLayerHidden(s, key);
-  return `<div class="layer-row ${hidden?"is-hidden-row":""}" data-key="${key}">
-    <span class="layer-row-label">${meta.icon} ${escapeXML(meta.label)}</span>
+  const isSelected = selectedLayerKey===key;
+  return `<div class="layer-row ${hidden?"is-hidden-row":""} ${isSelected?"is-selected-row":""}" data-key="${key}">
+    <span class="layer-row-icon">${meta.icon}</span>
+    <span class="layer-row-label">${escapeXML(meta.label)}</span>
     <div class="layer-row-actions">
       <button type="button" class="layer-row-btn" data-act="up" data-key="${key}" ${viIdx===0?"disabled":""} title="Bring forward" aria-label="Bring ${escAttr(meta.label)} forward">\u2191</button>
       <button type="button" class="layer-row-btn" data-act="down" data-key="${key}" ${viIdx===total-1?"disabled":""} title="Send backward" aria-label="Send ${escAttr(meta.label)} backward">\u2193</button>
-      <button type="button" class="layer-row-eye ${hidden?"is-hidden":""}" data-act="toggle" data-key="${key}" title="${hidden?"Show":"Hide"} this layer" aria-label="${hidden?"Show":"Hide"} ${escAttr(meta.label)}">${hidden?"\u{1F648}":"\u{1F441}\uFE0F"}</button>
+      <button type="button" class="layer-row-eye ${hidden?"is-hidden":""}" data-act="toggle" data-key="${key}" title="${hidden?"Show":"Hide"} this layer" aria-label="${hidden?"Show":"Hide"} ${escAttr(meta.label)}">${hidden?ICON_EYE_OFF:ICON_EYE}</button>
     </div>
   </div>`;
 }
@@ -2336,7 +2378,82 @@ function wireLayersPanel(){
   list.querySelectorAll("[data-act='down']").forEach(btn=>{
     btn.onclick = ()=>{ moveLayerInOrder(s, btn.dataset.key, -1); renderSidebar(); renderStage(); commitThumb(state.active); };
   });
+  // Clicking a row's label (not its buttons) selects that layer: arms keyboard nudge for
+  // text-ish boxes (reusing the same selectedTextBox the drag/resize handles already set),
+  // highlights the row itself, and keeps a persistent outline around its on-canvas
+  // element(s) until deselected (Escape, clicking the slide background, or switching
+  // slides) \u2014 so picking a layer from a long list is an actual selection, not a blink.
+  list.querySelectorAll(".layer-row").forEach(row=>{
+    const label = row.querySelector(".layer-row-label");
+    const icon = row.querySelector(".layer-row-icon");
+    const activate = ()=>selectLayerForEditing(row.dataset.key);
+    if(label) label.onclick = activate;
+    if(icon) icon.onclick = activate;
+  });
 }
+/* Arms keyboard-nudge (via the existing selectedTextBox mechanism) for layers that have an
+   offsetX/offsetY box, marks the layer as persistently selected (highlighted row + outlined
+   canvas element until deselected), and gives an immediate pulse so the selection is easy to
+   spot even on a layer that was already selected. Elements are re-tagged with data-layer-key
+   on every render, so applySelectedLayerHighlight() always targets the live node. */
+function selectLayerForEditing(key){
+  const s = state.slides[state.active];
+  selectedLayerKey = key;
+  if(key==="text") selectedTextBox = {obj:s, offXKey:"textOffsetX", offYKey:"textOffsetY", slideIdx: state.active};
+  else if(key==="body") selectedTextBox = {obj:s, offXKey:"bodyOffsetX", offYKey:"bodyOffsetY", slideIdx: state.active};
+  else if(key.indexOf("extra:")===0){
+    const tl = (s.textLayers||[]).find(t=>("extra:"+t.id)===key);
+    selectedTextBox = tl ? {obj:tl, offXKey:"offsetX", offYKey:"offsetY", slideIdx: state.active} : null;
+  } else {
+    selectedTextBox = null; // no on-canvas nudge target for photo/logo/badge/etc.
+  }
+  renderSidebar();
+  flashHighlightLayer(key);
+  applySelectedLayerHighlight();
+}
+function deselectLayer(){
+  if(!selectedLayerKey) return;
+  selectedLayerKey = null;
+  const stage = document.getElementById("stage");
+  if(stage) stage.querySelectorAll(".layer-selected").forEach(el=>el.classList.remove("layer-selected"));
+  renderSidebar();
+}
+/* Re-applies the persistent selection outline after a re-render (buildSlideDOM always
+   builds fresh nodes, so the class doesn't survive a renderStage() on its own). Called from
+   renderStage() itself \u2014 a no-op whenever nothing is selected. */
+function applySelectedLayerHighlight(){
+  if(!selectedLayerKey) return;
+  const stage = document.getElementById("stage");
+  if(!stage) return;
+  stage.querySelectorAll(`[data-layer-key="${selectedLayerKey}"]`).forEach(el=>el.classList.add("layer-selected"));
+}
+function flashHighlightLayer(key){
+  const stage = document.getElementById("stage");
+  const els = stage ? stage.querySelectorAll(`[data-layer-key="${key.replace(/"/g,'')}"]`) : [];
+  if(!els.length){
+    showToast("This layer doesn't have its own box on the canvas \u2014 use the sidebar sections above to edit it.");
+    return;
+  }
+  els.forEach(el=>{
+    el.classList.remove("layer-flash");
+    void el.offsetWidth; // restart the CSS animation if the same layer is clicked again quickly
+    el.classList.add("layer-flash");
+    setTimeout(()=>el.classList.remove("layer-flash"), 900);
+  });
+}
+// Escape (while not typing somewhere) and clicking the bare slide background both clear
+// the current layer selection \u2014 the standard "click away to deselect" affordance.
+document.addEventListener("keydown", e=>{
+  if(e.key!=="Escape" || !selectedLayerKey) return;
+  const ae = document.activeElement, tag = ae ? ae.tagName : "";
+  if(ae && (ae.isContentEditable || tag==="INPUT" || tag==="TEXTAREA")) return;
+  deselectLayer();
+});
+document.addEventListener("click", e=>{
+  if(selectedLayerKey && e.target.classList && e.target.classList.contains("slide") && e.target.closest("#stage")){
+    deselectLayer();
+  }
+});
 
 function renderSidebar(){
   const s = state.slides[state.active];
@@ -2687,6 +2804,10 @@ function renderSidebar(){
     `:``}
     ` : `<div class="empty-hint">Switch this slide's layout to "Full bleed" to enable this effect \u2014 the cutout needs to sit in the same space as your text.</div>`}
     `, "\u{1FA84}", !!s.cutoutImage)}
+    ${sec("layers", "Layers", `
+    <div class="empty-hint" style="margin-top:-2px;margin-bottom:8px;">Show/hide anything on this slide, or reorder it front-to-back with the arrows (top of the list = drawn on top).</div>
+    ${layersPanelHTML(s)}
+    `, LAYER_ICON_SVG.layer2, !!((s.layerHidden && Object.values(s.layerHidden).some(Boolean)) || (s.layerOrder && s.layerOrder.length)))}
     ${sec("logo", "Logo", `
     <div class="field">
       <label>Small logo <span style="font-weight:400;color:var(--muted)">(optional watermark)</span></label>
@@ -2747,10 +2868,6 @@ function renderSidebar(){
       <div class="empty-hint" style="margin-top:6px;">Copies the bar text, divider, and color to every slide.</div>
     </div>
     `, "\u{1F516}", !!(s.sigTL||s.sigTR||s.sigBL||s.sigBR))}
-    ${sec("layers", "Layers", `
-    <div class="empty-hint" style="margin-top:-2px;margin-bottom:8px;">Show/hide anything on this slide, or reorder it front-to-back with the arrows (top of the list = drawn on top).</div>
-    ${layersPanelHTML(s)}
-    `, "\u{1F5C2}\uFE0F")}
     ${sec("colors", "Colors", `
     <div class="field">
       <label>Background color</label>
@@ -3224,6 +3341,7 @@ function buildSlideDOM(s, idx, editable, W){
 
     const frameImg = document.createElement("div");
     frameImg.className = "frame-image" + (editable ? " editable" : "");
+    frameImg.dataset.layerKey = "image";
     frameImg.style.left = boxes.image.x+"px"; frameImg.style.top = boxes.image.y+"px";
     frameImg.style.width = boxes.image.w+"px"; frameImg.style.height = boxes.image.h+"px";
     frameImg.style.borderRadius = ((s.imageRadius||0)*W)+"px";
@@ -3248,6 +3366,7 @@ function buildSlideDOM(s, idx, editable, W){
     if(layer2Active){
       const frameImg2 = document.createElement("div");
       frameImg2.className = "frame-image" + (editable ? " editable" : "");
+      frameImg2.dataset.layerKey = "layer2";
       frameImg2.style.left = boxes.image.x+"px"; frameImg2.style.top = boxes.image.y+"px";
       frameImg2.style.width = boxes.image.w+"px"; frameImg2.style.height = boxes.image.h+"px";
       frameImg2.style.borderRadius = ((s.imageRadius||0)*W)+"px";
@@ -3276,6 +3395,7 @@ function buildSlideDOM(s, idx, editable, W){
     if((s.layout||"full")==="full" && s.overlayDirection && s.overlayDirection!=="none" && !isLayerHidden(s,"overlay")){
       const ov = document.createElement("div");
       ov.className = "slide-overlay";
+      ov.dataset.layerKey = "overlay";
       ov.style.left = boxes.image.x+"px"; ov.style.top = boxes.image.y+"px";
       ov.style.width = boxes.image.w+"px"; ov.style.height = boxes.image.h+"px";
       ov.style.borderRadius = ((s.imageRadius||0)*W)+"px";
@@ -3292,6 +3412,7 @@ function buildSlideDOM(s, idx, editable, W){
   if(!isLayerHidden(s,"text")){
   frameText = document.createElement("div");
   frameText.className = `frame-text pos-${s.position} align-${s.align}`;
+  frameText.dataset.layerKey = "text";
   const textBoxW = (s.textBoxWRatio||1) * boxes.text.w;
   const textBoxH = (s.textBoxHRatio||1) * boxes.text.h;
   const textBoxWPx = Math.max(10,textBoxW-2*pad), textBoxHPx = Math.max(10,textBoxH-2*pad);
@@ -3373,6 +3494,7 @@ function buildSlideDOM(s, idx, editable, W){
     const bAlign = s.bodyAlign || (s.layout==="editorial" ? "left" : s.align);
     frameBody = document.createElement("div");
     frameBody.className = `frame-text pos-${s.bodyPosition||"top"} align-${bAlign}`;
+    frameBody.dataset.layerKey = "body";
     const bodyBoxW = (s.bodyBoxWRatio||1) * boxes.body.w;
     const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.body.h;
     const bodyBoxWPx = Math.max(10,bodyBoxW-2*pad), bodyBoxHPx = Math.max(10,bodyBoxH-2*pad);
@@ -3444,6 +3566,7 @@ function buildSlideDOM(s, idx, editable, W){
     }
     const frameLayer = document.createElement("div");
     frameLayer.className = `frame-text layer-text pos-center align-${tl.align||"left"}`;
+    frameLayer.dataset.layerKey = "extra:"+tl.id;
     frameLayer.style.left = layerLeftPx+"px"; frameLayer.style.top = layerTopPx+"px";
     frameLayer.style.width = layerBoxWPx+"px"; frameLayer.style.height = layerBoxHPx+"px";
 
@@ -3493,6 +3616,7 @@ function buildSlideDOM(s, idx, editable, W){
   if((s.layout||"full")==="full" && s.cutoutImage && s.cutoutImageEl && !isLayerHidden(s,"cutout")){
     const frameCutout = document.createElement("div");
     frameCutout.className = "frame-image cutout-layer" + (editable ? " editable" : "");
+    frameCutout.dataset.layerKey = "cutout";
     frameCutout.style.left = boxes.image.x+"px"; frameCutout.style.top = boxes.image.y+"px";
     frameCutout.style.width = boxes.image.w+"px"; frameCutout.style.height = boxes.image.h+"px";
     frameCutout.style.opacity = (s.cutoutOpacity??100)/100;
@@ -3520,6 +3644,7 @@ function buildSlideDOM(s, idx, editable, W){
     const badgePx = W*0.026;
     const badge = document.createElement("div");
     badge.className = "slide-badge";
+    badge.dataset.layerKey = "badge";
     badge.style.background = state.accent;
     badge.style.color = state.badgeTextColor;
     badge.style.right = (W*0.05)+"px";
@@ -3538,6 +3663,7 @@ function buildSlideDOM(s, idx, editable, W){
   function makeSigRow(edgeProp, leftText, rightText, borderProp, padProp, edgeOffset){
     const row = document.createElement("div");
     row.className = "slide-signature-row";
+    row.dataset.layerKey = "signature";
     row.style.left = sigPad+"px"; row.style.right = sigPad+"px"; row.style[edgeProp] = (sigPad+(edgeOffset||0))+"px";
     row.style.color = sigColor; row.style.fontFamily = fp.bodyFont; row.style.fontSize = sigPx+"px";
     if(s.sigDivider!==false){
@@ -3555,6 +3681,7 @@ function buildSlideDOM(s, idx, editable, W){
   if(showSwipeHint){
     const hint = document.createElement("div");
     hint.className = "slide-swipe-hint";
+    hint.dataset.layerKey = "swipeHint";
     hint.style.left = sigPad+"px"; hint.style.right = sigPad+"px"; hint.style.bottom = sigPad+"px";
     hint.style.color = state.swipeHintColor || s.textColor;
     hint.style.fontFamily = fp.bodyFont; hint.style.fontSize = (W*0.02)+"px";
@@ -3578,6 +3705,7 @@ function buildSlideDOM(s, idx, editable, W){
     const lp = logoPosition(s.logoPos||"tl", W, H, lw, lh);
     const logo = document.createElement("img");
     logo.className = "slide-logo"; logo.draggable = false;
+    logo.dataset.layerKey = "logo";
     logo.src = s.logoImage;
     logo.style.left = lp.x+"px"; logo.style.top = lp.y+"px";
     logo.style.width = lw+"px"; logo.style.height = lh+"px";
@@ -4010,6 +4138,7 @@ function renderStage(){
   const widthPx = Math.max(160, Math.min(maxW, maxHRatio));
   const slideDiv = buildSlideDOM(state.slides[state.active], state.active, true, widthPx);
   stage.appendChild(slideDiv);
+  applySelectedLayerHighlight();
 }
 
 function buildThumb(idx){
@@ -4128,6 +4257,7 @@ function updateRailActiveClasses(){
 }
 function setActiveSlide(idx){
   state.active = idx;
+  selectedLayerKey = null; // layer selection doesn't carry over across slides
   renderSidebar();
   renderStage();
   updateRailActiveClasses();
@@ -5141,8 +5271,13 @@ function showResumeBanner(snap){
     <div class="resume-actions">
       <button class="btn small" id="resumeDiscardBtn">Start fresh</button>
       <button class="btn small primary" id="resumeLoadBtn">Resume</button>
+      <button class="resume-close" id="resumeCloseBtn" aria-label="Dismiss">\u2715</button>
     </div>`;
   document.body.appendChild(bar);
+  // Reaching this banner at all means this clearly isn't someone's very first visit, so
+  // mark onboarding as seen too \u2014 otherwise clearing the autosave later could make the
+  // "this is just an example" banner pop up for what is, by now, a returning person.
+  markOnboardingSeen();
   document.getElementById("resumeLoadBtn").onclick = async ()=>{
     historyStack = []; redoStack = [];
     await restoreSnapshot(snap);
@@ -5154,10 +5289,63 @@ function showResumeBanner(snap){
     try{ localStorage.removeItem(AUTOSAVE_KEY); }catch(e){}
     bar.remove();
   };
+  document.getElementById("resumeCloseBtn").onclick = ()=>bar.remove();
+}
+
+/* ============================= FIRST-VISIT ONBOARDING ============================= */
+/* The deck loads pre-filled with an example carousel (see defaultSlides()) so returning
+   users and anyone opening a fresh tab always see something concrete rather than a blank
+   canvas. That's convenient once you know the app, but disorienting on a genuine first
+   visit \u2014 there's nothing telling a new person "this is a demo, not your content". A
+   one-time banner (shown only when there's no autosave to resume instead, see the mutually
+   exclusive call at the bottom of this file) makes that explicit and offers a real blank
+   slide as an alternative starting point. */
+const ONBOARDING_KEY = "carousel-studio-onboarded-v1";
+function markOnboardingSeen(){ try{ localStorage.setItem(ONBOARDING_KEY, "1"); }catch(e){} }
+function blankStarterSlide(){
+  return { ...blankSlideDefaults(), heading:"Your headline here", body:"", bgColor:"#FAFAF9", textColor:"#14161A", position:"center", align:"left" };
+}
+function startBlankProject(){
+  historyStack = []; redoStack = [];
+  state.slides = [blankStarterSlide()];
+  state.active = 0;
+  renderAll();
+  showToast("Started a blank carousel");
+}
+function tryOfferFirstVisitOnboarding(){
+  let seen;
+  try{ seen = localStorage.getItem(ONBOARDING_KEY); }catch(e){ return; }
+  if(seen) return;
+  showOnboardingBanner();
+}
+function showOnboardingBanner(){
+  const bar = document.createElement("div");
+  bar.className = "resume-banner";
+  bar.innerHTML = `
+    <span>You're looking at an example carousel, not your own content yet.</span>
+    <div class="resume-actions">
+      <button class="btn small" id="onboardStartBlankBtn">Start with a blank slide</button>
+      <button class="btn small primary" id="onboardKeepBtn">Keep exploring this one</button>
+      <button class="resume-close" id="onboardCloseBtn" aria-label="Dismiss">\u2715</button>
+    </div>`;
+  document.body.appendChild(bar);
+  document.getElementById("onboardKeepBtn").onclick = ()=>{ markOnboardingSeen(); bar.remove(); };
+  document.getElementById("onboardStartBlankBtn").onclick = ()=>{
+    markOnboardingSeen();
+    startBlankProject();
+    bar.remove();
+  };
+  document.getElementById("onboardCloseBtn").onclick = ()=>{ markOnboardingSeen(); bar.remove(); };
 }
 
 renderAll();
-tryOfferAutosaveResume();
+// Resuming a genuinely saved session and the "this is just an example" first-visit notice
+// are mutually exclusive \u2014 a returning person with real autosaved work should never be
+// told they're looking at a demo.
+let hasAutosaveForOnboardingCheck = false;
+try{ hasAutosaveForOnboardingCheck = !!localStorage.getItem(AUTOSAVE_KEY); }catch(e){}
+if(hasAutosaveForOnboardingCheck) tryOfferAutosaveResume();
+else tryOfferFirstVisitOnboarding();
 </script>
 </body>
 </html>
