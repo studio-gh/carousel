@@ -487,6 +487,14 @@
     display:flex; align-items:center; justify-content:center;
   }
   .bulk-photo-thumb button:hover{ background:rgba(15,15,15,.95); }
+  .bulk-photo-thumb.selectable{ cursor:pointer; border:2px solid transparent; }
+  .bulk-photo-thumb.selectable:hover{ border-color:var(--line-strong); }
+  .bulk-photo-thumb.selectable.selected{ border-color:var(--accent-ui); }
+  .bulk-photo-thumb .bulk-photo-check{
+    position:absolute; top:3px; right:3px; width:18px; height:18px; border-radius:50%;
+    background:var(--accent-ui); color:#1A1A1A; font-size:11px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
   .story-modal{
     display:none; position:fixed; inset:0; z-index:300; background:#000;
     align-items:center; justify-content:center;
@@ -531,6 +539,7 @@
         <button onclick="document.getElementById('loadProjectInput').click()">Load project&hellip;</button>
         <button onclick="openImportModal()">Importar texto&hellip;</button>
         <button onclick="openAIPromptModal()">&#10024; Gerar texto com IA&hellip;</button>
+        <button onclick="openUrlImportModal()">&#128279; Importar de um link&hellip;</button>
       </div>
     </div>
     <input type="file" accept="application/json,.json" id="loadProjectInput" style="display:none">
@@ -614,6 +623,40 @@
     <div class="import-modal-actions">
       <button class="btn small" id="aiPromptCancel">Fechar</button>
       <button class="btn small primary" id="aiPromptCopy">Copiar prompt</button>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="urlImportModalBackdrop"></div>
+  <div class="import-modal" id="urlImportModal" role="dialog" aria-modal="true" aria-labelledby="urlImportModalTitle" style="width:min(92vw, 680px);">
+    <h3 id="urlImportModalTitle">&#128279; Importar de um link</h3>
+    <p class="import-modal-hint">
+      Cole o link de um artigo ou página. A ferramenta busca o texto automaticamente (via um
+      serviço de leitura de terceiros, <code>r.jina.ai</code>) e procura imagens na página.
+      Funciona melhor em artigos de blog/notícia comuns — sites com login, paywall, ou muito
+      JavaScript podem falhar. Se falhar, copie o texto do artigo manualmente e cole direto no
+      prompt de IA (<strong>Project &rarr; Gerar texto com IA</strong>).
+    </p>
+    <div class="row2" style="grid-template-columns:1fr auto;">
+      <input type="text" id="urlImportInput" placeholder="https://exemplo.com/artigo" autocomplete="off" spellcheck="false">
+      <button class="btn small primary" id="urlImportFetchBtn">Buscar conteúdo</button>
+    </div>
+    <p class="import-modal-hint" id="urlImportStatus" style="display:none;margin-top:8px;"></p>
+    <div id="urlImportResults" style="display:none;">
+      <div class="field" style="margin-top:10px;">
+        <label>Texto extraído <span style="font-weight:400;color:var(--muted)">(edite/resuma antes de usar, se quiser)</span></label>
+        <textarea id="urlImportTextarea" rows="9" style="width:100%;font-family:'Inter',sans-serif;font-size:12.5px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(255,252,244,.05);color:var(--ink);resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label>Imagens encontradas <span style="font-weight:400;color:var(--muted)">(clique pra selecionar; nem todo site permite baixar automaticamente)</span></label>
+        <div class="bulk-photo-grid" id="urlImportImageGrid"></div>
+        <div class="empty-hint" id="urlImportNoImages" style="display:none;">Nenhuma imagem encontrada nessa página.</div>
+      </div>
+    </div>
+    <div class="import-modal-actions" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <button class="btn small" id="urlImportCancel">Fechar</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn small" id="urlImportUseImagesBtn" disabled>Usar imagens selecionadas</button>
+        <button class="btn small primary" id="urlImportUseTextBtn" disabled>Copiar prompt de IA com este texto</button>
+      </div>
     </div>
   </div>
   <div class="modal-backdrop" id="storyBackdrop"></div>
@@ -2061,6 +2104,156 @@ async function applyBulkPhotoQueue(){
   const files = bulkPhotoQueue.map(item=>item.file);
   closeBulkPhotoModal(); // clears the queue & revokes preview URLs
   await applyBulkImagesToSlides(files);
+}
+
+/* ====================== IMPORT FROM A LINK (fetch article text + candidate images) ======================
+   This is a static, backend-less HTML file, so fetching an arbitrary URL's HTML directly
+   from the browser hits CORS on almost every real site. We route through r.jina.ai, a public
+   "reader" proxy: GET https://r.jina.ai/<full-url-with-scheme> returns the page's main
+   content as clean markdown (readable text, with images already expressed as standard
+   markdown image syntax) with permissive CORS \u2014 no API key, no server of our own needed.
+   Text extraction this way is reliable. Image extraction is inherently best-effort: we can
+   always DISPLAY a cross-origin <img> as a thumbnail (that never needs CORS), but actually
+   downloading the bytes to use as a real slide photo requires fetch() to succeed against
+   that image's own host, which many CDNs block for cross-origin requests. Failed downloads
+   are reported, not silently ignored \u2014 the person can always save+upload that one manually. */
+let urlImportImages = []; // [{url, selected}]
+function normalizeUrlForImport(raw){
+  let u = (raw||"").trim();
+  if(!u) return "";
+  if(!/^https?:\/\//i.test(u)) u = "https://"+u;
+  return u;
+}
+function extractImageUrlsFromReaderText(text){
+  const urls = [], seen = new Set();
+  const mdRe = /!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g;
+  let m;
+  while((m = mdRe.exec(text))){ if(!seen.has(m[1])){ seen.add(m[1]); urls.push(m[1]); } }
+  const imgTagRe = /<img[^>]+src=["']([^"']+)["']/gi;
+  while((m = imgTagRe.exec(text))){
+    if(/^https?:\/\//i.test(m[1]) && !seen.has(m[1])){ seen.add(m[1]); urls.push(m[1]); }
+  }
+  return urls.slice(0, 24);
+}
+function cleanExtractedReaderText(raw){
+  let t = raw || "";
+  t = t.replace(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g, "");           // drop markdown images
+  t = t.replace(/\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, "$1");        // markdown links -> plain label text
+  t = t.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  const LIMIT = 8000;
+  if(t.length > LIMIT) t = t.slice(0, LIMIT) + "\n\n[\u2026 texto truncado \u2014 edite acima se quiser encurtar ou manter mais]";
+  return t;
+}
+async function fetchUrlContentForImport(){
+  const input = document.getElementById("urlImportInput");
+  const status = document.getElementById("urlImportStatus");
+  const results = document.getElementById("urlImportResults");
+  const fetchBtn = document.getElementById("urlImportFetchBtn");
+  const url = normalizeUrlForImport(input.value);
+  if(!url){ showToast("Cole um link primeiro"); return; }
+  status.style.display = ""; status.style.color = "";
+  status.textContent = "Buscando conte\u00fado\u2026 pode levar alguns segundos.";
+  results.style.display = "none";
+  fetchBtn.disabled = true;
+  try{
+    const res = await fetch("https://r.jina.ai/" + url);
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const raw = await res.text();
+    if(!raw || !raw.trim()) throw new Error("resposta vazia");
+    const cleaned = cleanExtractedReaderText(raw);
+    urlImportImages = extractImageUrlsFromReaderText(raw).map(u=>({url:u, selected:false}));
+    document.getElementById("urlImportTextarea").value = cleaned;
+    renderUrlImportImageGrid();
+    results.style.display = "";
+    status.style.display = "none";
+    updateUrlImportActionButtons();
+  }catch(e){
+    status.style.color = "var(--danger)";
+    status.textContent = "N\u00e3o consegui buscar esse link (" + (e && e.message ? e.message : "erro desconhecido") + "). Alguns sites bloqueiam acesso externo \u2014 tente copiar o texto do artigo manualmente e colar direto no prompt de IA (Project \u2192 Gerar texto com IA).";
+  }finally{
+    fetchBtn.disabled = false;
+  }
+}
+function renderUrlImportImageGrid(){
+  const grid = document.getElementById("urlImportImageGrid");
+  const noImg = document.getElementById("urlImportNoImages");
+  if(!grid) return;
+  grid.innerHTML = urlImportImages.map((img,i)=>`
+    <div class="bulk-photo-thumb selectable ${img.selected?"selected":""}" data-idx="${i}">
+      <img src="${escAttr(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.bulk-photo-thumb').style.display='none'">
+      ${img.selected?'<span class="bulk-photo-check">\u2713</span>':""}
+    </div>`).join("");
+  grid.querySelectorAll(".bulk-photo-thumb[data-idx]").forEach(el=>{
+    el.onclick = ()=>{
+      const i = +el.dataset.idx;
+      urlImportImages[i].selected = !urlImportImages[i].selected;
+      renderUrlImportImageGrid();
+      updateUrlImportActionButtons();
+    };
+  });
+  if(noImg) noImg.style.display = urlImportImages.length ? "none" : "";
+}
+function updateUrlImportActionButtons(){
+  const useImgBtn = document.getElementById("urlImportUseImagesBtn");
+  const useTextBtn = document.getElementById("urlImportUseTextBtn");
+  const nSelected = urlImportImages.filter(i=>i.selected).length;
+  if(useImgBtn){
+    useImgBtn.disabled = nSelected===0;
+    useImgBtn.textContent = nSelected ? `Usar imagens selecionadas (${nSelected})` : "Usar imagens selecionadas";
+  }
+  if(useTextBtn){
+    const ta = document.getElementById("urlImportTextarea");
+    useTextBtn.disabled = !(ta && ta.value.trim());
+  }
+}
+async function useUrlImportImages(){
+  const selected = urlImportImages.filter(i=>i.selected).map(i=>i.url);
+  if(!selected.length) return;
+  showToast(`Baixando ${selected.length} imagem${selected.length===1?"":"ns"}\u2026`);
+  const blobs = [];
+  let failed = 0;
+  for(const u of selected){
+    try{
+      const res = await fetch(u);
+      if(!res.ok) throw new Error();
+      const blob = await res.blob();
+      if(!blob.type || !blob.type.startsWith("image/")) throw new Error();
+      blobs.push(blob);
+    }catch(e){ failed++; }
+  }
+  closeUrlImportModal();
+  if(blobs.length) await applyBulkImagesToSlides(blobs);
+  if(failed){
+    showToast(`${failed} imagem${failed===1?"":"ns"} n\u00e3o p\u00f4de${failed===1?"":"ram"} ser baixada${failed===1?"":"s"} automaticamente (o site bloqueou) \u2014 salve e envie manualmente se precisar.`);
+  } else if(!blobs.length){
+    showToast("Nenhuma imagem p\u00f4de ser baixada automaticamente");
+  }
+}
+function useUrlImportTextInPrompt(){
+  const ta = document.getElementById("urlImportTextarea");
+  const text = ta ? ta.value.trim() : "";
+  if(!text){ showToast("N\u00e3o h\u00e1 texto extra\u00eddo pra usar"); return; }
+  const combined = AI_PROMPT_TEXT + "\n\n---\n\nConte\u00fado extra\u00eddo do link abaixo \u2014 use como mat\u00e9ria-prima pra pauta (resuma e adapte, n\u00e3o precisa usar tudo ao p\u00e9 da letra):\n\n" + text;
+  closeUrlImportModal();
+  document.getElementById("aiPromptModalBackdrop").classList.add("open");
+  document.getElementById("aiPromptModal").classList.add("open");
+  document.getElementById("aiPromptText").value = combined;
+  copyAIPromptText();
+}
+function openUrlImportModal(){
+  document.getElementById("projectDropdown").classList.remove("open");
+  document.getElementById("urlImportModalBackdrop").classList.add("open");
+  document.getElementById("urlImportModal").classList.add("open");
+  document.getElementById("urlImportInput").value = "";
+  document.getElementById("urlImportResults").style.display = "none";
+  document.getElementById("urlImportStatus").style.display = "none";
+  urlImportImages = [];
+  updateUrlImportActionButtons();
+  setTimeout(()=>document.getElementById("urlImportInput").focus(), 30);
+}
+function closeUrlImportModal(){
+  document.getElementById("urlImportModalBackdrop").classList.remove("open");
+  document.getElementById("urlImportModal").classList.remove("open");
 }
 
 function applyLogoFileToActiveSlide(file){
@@ -5181,6 +5374,16 @@ document.getElementById("importModalConfirm").onclick = ()=>{
 document.getElementById("aiPromptModalBackdrop").onclick = closeAIPromptModal;
 document.getElementById("aiPromptCancel").onclick = closeAIPromptModal;
 document.getElementById("aiPromptCopy").onclick = copyAIPromptText;
+
+document.getElementById("urlImportModalBackdrop").onclick = closeUrlImportModal;
+document.getElementById("urlImportCancel").onclick = closeUrlImportModal;
+document.getElementById("urlImportFetchBtn").onclick = fetchUrlContentForImport;
+document.getElementById("urlImportInput").addEventListener("keydown", e=>{
+  if(e.key==="Enter"){ e.preventDefault(); fetchUrlContentForImport(); }
+});
+document.getElementById("urlImportUseImagesBtn").onclick = useUrlImportImages;
+document.getElementById("urlImportUseTextBtn").onclick = useUrlImportTextInPrompt;
+document.getElementById("urlImportTextarea").addEventListener("input", updateUrlImportActionButtons);
 
 document.getElementById("bulkPhotoModalBackdrop").onclick = closeBulkPhotoModal;
 document.getElementById("bulkPhotoModalCancel").onclick = closeBulkPhotoModal;
