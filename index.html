@@ -2397,10 +2397,30 @@ function logoPosition(pos, W, H, lw, lh){
     case "center": default: return { x:(W-lw)/2, y:(H-lh)/2 };
   }
 }
+/* Long, narrative-style headlines (a full sentence or two, like the analytical/essay-style
+   copy some AI prompts produce) look wrong at the same default size tuned for short punchy
+   titles ("5 morning habits..."): even when the fit-to-box shrink loop technically keeps
+   them from overflowing, a 6\u20138 line headline at full default size still swallows almost the
+   entire slide, leaving the body paragraph squeezed to the very last sliver of the box. This
+   scales the STARTING headline size down as the headline gets longer, before any shrink-to-
+   fit even runs, so long headlines read more like the reference "long-caption" carousel
+   style (restrained heading, room left for the supporting paragraph) by default \u2014 short
+   headlines are completely unaffected. Manual per-slide "Headline size (px)" overrides
+   (headSizePx) always take precedence over this, same as before. */
+function estimateHeadlineLengthFactor(headingRaw){
+  const plain = headingPlainText(headingRaw||"").replace(/\s+/g," ").trim();
+  const len = plain.length;
+  const SHORT = 55, LONG = 220, MIN_FACTOR = 0.58;
+  if(len <= SHORT) return 1;
+  if(len >= LONG) return MIN_FACTOR;
+  const t = (len - SHORT) / (LONG - SHORT);
+  return 1 - t*(1-MIN_FACTOR);
+}
 function textSizes(W, s){
   // headSizePx/bodySizePx are optional per-slide numeric overrides (in px, at the
-  // canvas's base width). If unset, fall back to the deck-wide S/M/L multiplier.
-  const headBase = (s.headSizePx!=null && s.headSizePx>0) ? s.headSizePx : W*0.086*SIZE_MULT[state.size];
+  // canvas's base width). If unset, fall back to the deck-wide S/M/L multiplier, scaled
+  // down automatically for longer headlines (see estimateHeadlineLengthFactor above).
+  const headBase = (s.headSizePx!=null && s.headSizePx>0) ? s.headSizePx : W*0.086*SIZE_MULT[state.size]*estimateHeadlineLengthFactor(s.heading);
   const bodyBase = (s.bodySizePx!=null && s.bodySizePx>0) ? s.bodySizePx : W*0.036*SIZE_MULT[state.size];
   const ht = s.tscale||1;
   // When the body text is detached into its own box, it auto-shrinks independently
@@ -2802,14 +2822,14 @@ function renderSidebar(){
     <div class="row2">
       <div class="field">
         <label>Headline size (px)</label>
-        <input type="number" id="headSizeInput" placeholder="${Math.round(ASPECTS[state.aspect].w*0.086*SIZE_MULT[state.size])}" min="8" max="400" step="1" value="${s.headSizePx!=null?Math.round(s.headSizePx):""}">
+        <input type="number" id="headSizeInput" placeholder="${Math.round(ASPECTS[state.aspect].w*0.086*SIZE_MULT[state.size]*estimateHeadlineLengthFactor(s.heading))}" min="8" max="400" step="1" value="${s.headSizePx!=null?Math.round(s.headSizePx):""}">
       </div>
       <div class="field">
         <label>Body size (px)</label>
         <input type="number" id="bodySizeInput" placeholder="${Math.round(ASPECTS[state.aspect].w*0.036*SIZE_MULT[state.size])}" min="6" max="200" step="1" value="${s.bodySizePx!=null?Math.round(s.bodySizePx):""}">
       </div>
     </div>
-    <div class="empty-hint">Leave blank to use the deck's S/M/L size. Type a number to set this slide's exact size in pixels \u2014 it'll still auto-shrink if the text overflows its box.</div>`)}
+    <div class="empty-hint">Leave blank to auto-size from the deck's S/M/L setting \u2014 long headlines start smaller automatically so there's room left for the body text. Type a number to force this slide's exact size in pixels instead; it'll still auto-shrink further if the text overflows its box.</div>`)}
     <div class="field" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:12px;">
       <label>Text position</label>
       ${segmented("segPos", [
