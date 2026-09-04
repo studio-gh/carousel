@@ -2335,6 +2335,18 @@ function wireLayerPasteZone(id, applyFn){
     if(file) applyFn(file);
   });
 }
+/* Freeform text positions/sizes (textOffsetX/Y, bodyOffsetX/Y, extra-text-layer offsetX/Y,
+   and extra-text-layer fontSizePx) are stored in a single reference resolution \u2014 the
+   slide's actual EXPORT pixel size (ASPECTS[state.aspect].w/h) \u2014 regardless of how wide
+   the editor stage happens to be rendered on screen (it's fit to the viewport and can be
+   anywhere from ~300px to ~500px+ depending on window size). offScale(W) converts between
+   that reference space and whatever W a given render pass (stage/thumbnail/Canvas/SVG) is
+   using: multiply a stored reference value by offScale(W) to get this render's actual px;
+   divide a delta measured in this render's actual px by offScale(W) before storing it.
+   Without this, a drag/resize/size edit made on the (small) editor stage would land in the
+   wrong place, or at the wrong size, once rendered at full export resolution \u2014 this was a
+   real bug (see HANDOFF v44). */
+function offScale(W){ const a = ASPECTS[state.aspect]; return a ? (W/a.w) : 1; }
 function getBoxes(layout, W, H){
   // `body` is an optional third region, distinct from `text`, used only by layouts
   // that need the headline and support text to live in separate areas (e.g.
@@ -3629,7 +3641,8 @@ function buildSlideDOM(s, idx, editable, W){
   const textBoxW = (s.textBoxWRatio||1) * boxes.text.w;
   const textBoxH = (s.textBoxHRatio||1) * boxes.text.h;
   const textBoxWPx = Math.max(10,textBoxW-2*pad), textBoxHPx = Math.max(10,textBoxH-2*pad);
-  let textLeftPx = boxes.text.x+pad+(s.textOffsetX||0), textTopPx = boxes.text.y+pad+(s.textOffsetY||0);
+  const textOffSc = offScale(W);
+  let textLeftPx = boxes.text.x+pad+(s.textOffsetX||0)*textOffSc, textTopPx = boxes.text.y+pad+(s.textOffsetY||0)*textOffSc;
   // Self-heal: if a stored offset would place this box (and its corner handle) off-canvas
   // \u2014 most likely a slide saved before this safety clamp existed \u2014 pull it back on-screen
   // now instead of leaving it permanently unreachable except via Undo.
@@ -3645,8 +3658,8 @@ function buildSlideDOM(s, idx, editable, W){
     const maxLeft = Math.max(0, W-textBoxWPx), maxTop = Math.max(0, H-textBoxHPx);
     const clampedLeft = clamp(textLeftPx, 0, maxLeft), clampedTop = clamp(textTopPx, 0, maxTop);
     if(editable){
-      if(clampedLeft!==textLeftPx) s.textOffsetX = (s.textOffsetX||0) + (clampedLeft-textLeftPx);
-      if(clampedTop!==textTopPx) s.textOffsetY = (s.textOffsetY||0) + (clampedTop-textTopPx);
+      if(clampedLeft!==textLeftPx) s.textOffsetX = (s.textOffsetX||0) + (clampedLeft-textLeftPx)/textOffSc;
+      if(clampedTop!==textTopPx) s.textOffsetY = (s.textOffsetY||0) + (clampedTop-textTopPx)/textOffSc;
     }
     textLeftPx = clampedLeft; textTopPx = clampedTop;
   }
@@ -3711,7 +3724,8 @@ function buildSlideDOM(s, idx, editable, W){
     const bodyBoxW = (s.bodyBoxWRatio||1) * boxes.body.w;
     const bodyBoxH = (s.bodyBoxHRatio||1) * boxes.body.h;
     const bodyBoxWPx = Math.max(10,bodyBoxW-2*pad), bodyBoxHPx = Math.max(10,bodyBoxH-2*pad);
-    let bodyLeftPx = boxes.body.x+pad+(s.bodyOffsetX||0), bodyTopPx = boxes.body.y+pad+(s.bodyOffsetY||0);
+    const bodyOffSc = offScale(W);
+    let bodyLeftPx = boxes.body.x+pad+(s.bodyOffsetX||0)*bodyOffSc, bodyTopPx = boxes.body.y+pad+(s.bodyOffsetY||0)*bodyOffSc;
     // Same "editable-only self-heal" reasoning as the headline box above \u2014 see that
     // comment. Without this guard, this is the exact bug reported: detach the body,
     // drag it somewhere, and the very next thumbnail redraw (W=220) silently rewrites
@@ -3721,8 +3735,8 @@ function buildSlideDOM(s, idx, editable, W){
       const maxLeft = Math.max(0, W-bodyBoxWPx), maxTop = Math.max(0, H-bodyBoxHPx);
       const clampedLeft = clamp(bodyLeftPx, 0, maxLeft), clampedTop = clamp(bodyTopPx, 0, maxTop);
       if(editable){
-        if(clampedLeft!==bodyLeftPx) s.bodyOffsetX = (s.bodyOffsetX||0) + (clampedLeft-bodyLeftPx);
-        if(clampedTop!==bodyTopPx) s.bodyOffsetY = (s.bodyOffsetY||0) + (clampedTop-bodyTopPx);
+        if(clampedLeft!==bodyLeftPx) s.bodyOffsetX = (s.bodyOffsetX||0) + (clampedLeft-bodyLeftPx)/bodyOffSc;
+        if(clampedTop!==bodyTopPx) s.bodyOffsetY = (s.bodyOffsetY||0) + (clampedTop-bodyTopPx)/bodyOffSc;
       }
       bodyLeftPx = clampedLeft; bodyTopPx = clampedTop;
     }
@@ -3764,7 +3778,8 @@ function buildSlideDOM(s, idx, editable, W){
     if(isLayerHidden(s, "extra:"+tl.id)) return;
     const layerBoxWPx = Math.max(10, (tl.boxWRatio||0.72)*W - 2*pad);
     const layerBoxHPx = Math.max(10, (tl.boxHRatio||0.16)*H - 2*pad);
-    let layerLeftPx = pad+(tl.offsetX||0), layerTopPx = pad+(tl.offsetY||0);
+    const layerOffSc = offScale(W);
+    let layerLeftPx = pad+(tl.offsetX||0)*layerOffSc, layerTopPx = pad+(tl.offsetY||0)*layerOffSc;
     // Same "editable-only self-heal" fix as the headline/body boxes: only ever write the
     // on-canvas correction back into the layer's own data from the real editable stage,
     // never from a thumbnail (W=220) or Story preview render.
@@ -3772,8 +3787,8 @@ function buildSlideDOM(s, idx, editable, W){
       const maxLeft = Math.max(0, W-layerBoxWPx), maxTop = Math.max(0, H-layerBoxHPx);
       const clampedLeft = clamp(layerLeftPx, 0, maxLeft), clampedTop = clamp(layerTopPx, 0, maxTop);
       if(editable){
-        if(clampedLeft!==layerLeftPx) tl.offsetX = (tl.offsetX||0) + (clampedLeft-layerLeftPx);
-        if(clampedTop!==layerTopPx) tl.offsetY = (tl.offsetY||0) + (clampedTop-layerTopPx);
+        if(clampedLeft!==layerLeftPx) tl.offsetX = (tl.offsetX||0) + (clampedLeft-layerLeftPx)/layerOffSc;
+        if(clampedTop!==layerTopPx) tl.offsetY = (tl.offsetY||0) + (clampedTop-layerTopPx)/layerOffSc;
       }
       layerLeftPx = clampedLeft; layerTopPx = clampedTop;
     }
@@ -3807,7 +3822,7 @@ function buildSlideDOM(s, idx, editable, W){
       frameLayer.appendChild(delBtn);
     }
 
-    const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+    const basePx = tl.fontSizePx!=null ? tl.fontSizePx*layerOffSc : W*0.052;
     const el = document.createElement("div");
     el.className = "slide-heading layer-text-content";
     el.style.color = tl.color || s.textColor;
@@ -4002,7 +4017,7 @@ function fitTextLayerBox(slideDiv, frameLayer, tl, W){
   tl.tscale = 1;
   const el = frameLayer.querySelector(".layer-text-content");
   if(!el) return;
-  const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+  const basePx = tl.fontSizePx!=null ? tl.fontSizePx*offScale(W) : W*0.052;
   let tries = 0;
   while(el.scrollHeight > frameLayer.clientHeight + 1 && tl.tscale > 0.3 && tries < 60){
     tl.tscale -= 0.02;
@@ -4119,8 +4134,10 @@ document.addEventListener("keydown", e=>{
   e.preventDefault();
   const step = e.shiftKey ? 10 : 1;
   const {obj, offXKey, offYKey} = selectedTextBox;
-  obj[offXKey] = (obj[offXKey]||0) + d[0]*step;
-  obj[offYKey] = (obj[offYKey]||0) + d[1]*step;
+  const slideDivNudge = document.querySelector(".slide");
+  const nudgeSc = offScale(slideDivNudge ? parseFloat(slideDivNudge.style.width) : ASPECTS[state.aspect].w);
+  obj[offXKey] = (obj[offXKey]||0) + (d[0]*step)/nudgeSc;
+  obj[offYKey] = (obj[offYKey]||0) + (d[1]*step)/nudgeSc;
   renderStage();
   scheduleThumbCommit(state.active);
 });
@@ -4150,8 +4167,9 @@ function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
   handle.addEventListener("pointerdown", e=>{
     e.preventDefault(); e.stopPropagation();
     selectedTextBox = {obj:s, offXKey, offYKey, slideIdx: state.active};
+    const dragSc = offScale(W);
     const startX = e.clientX, startY = e.clientY;
-    const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
+    const baseOffX = (s[offXKey]||0)*dragSc, baseOffY = (s[offYKey]||0)*dragSc;
     const startLeft = parseFloat(moveEl.style.left)||0, startTop = parseFloat(moveEl.style.top)||0;
     const naturalLeft = startLeft - baseOffX, naturalTop = startTop - baseOffY;
     const boxW = moveEl.offsetWidth, boxH = moveEl.offsetHeight;
@@ -4175,8 +4193,8 @@ function attachTextDrag(handle, moveEl, s, offXKey, offYKey, W, H){
       document.removeEventListener("pointercancel", onUp);
       handle.classList.remove("dragging");
       hideCenterGuides(slideEl);
-      s[offXKey] = (startLeft+dx) - naturalLeft;
-      s[offYKey] = (startTop+dy) - naturalTop;
+      s[offXKey] = ((startLeft+dx) - naturalLeft)/dragSc;
+      s[offYKey] = ((startTop+dy) - naturalTop)/dragSc;
       renderStage();
       commitThumb(state.active);
     };
@@ -4198,8 +4216,9 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
   el.addEventListener("pointerdown", e=>{
     if(document.activeElement === el) return; // already editing \u2014 let native text selection work
     selectedTextBox = {obj:s, offXKey, offYKey, slideIdx: state.active};
+    const dragSc = offScale(W);
     const startX = e.clientX, startY = e.clientY;
-    const baseOffX = s[offXKey]||0, baseOffY = s[offYKey]||0;
+    const baseOffX = (s[offXKey]||0)*dragSc, baseOffY = (s[offYKey]||0)*dragSc;
     const startLeft = parseFloat(moveEl.style.left)||0, startTop = parseFloat(moveEl.style.top)||0;
     const naturalLeft = startLeft - baseOffX, naturalTop = startTop - baseOffY;
     const boxW = moveEl.offsetWidth, boxH = moveEl.offsetHeight;
@@ -4236,8 +4255,8 @@ function attachBoxDragFromContent(el, moveEl, s, offXKey, offYKey, W, H){
       hideCenterGuides(slideEl);
       if(dragging){
         moveEl.classList.remove("box-dragging");
-        s[offXKey] = (startLeft+dx) - naturalLeft;
-        s[offYKey] = (startTop+dy) - naturalTop;
+        s[offXKey] = ((startLeft+dx) - naturalLeft)/dragSc;
+        s[offYKey] = ((startTop+dy) - naturalTop)/dragSc;
         moveEl.style.transform = "";
         renderStage();
         commitThumb(state.active);
@@ -4272,13 +4291,14 @@ function attachCornerResize(handle, frameEl, slideDiv, s, corner, ratioWKey, rat
     selectedTextBox = {obj:s, offXKey, offYKey, slideIdx: state.active};
     const startX = e.clientX, startY = e.clientY;
     const startWRatio = s[ratioWKey] || 1, startHRatio = s[ratioHKey] || 1;
-    const startOffX = s[offXKey] || 0, startOffY = s[offYKey] || 0;
+    const W = parseFloat(slideDiv.style.width), H = parseFloat(slideDiv.style.height);
+    const resizeSc = offScale(W);
+    const startOffX = (s[offXKey]||0)*resizeSc, startOffY = (s[offYKey]||0)*resizeSc;
     // The box's position ("left"/"top" in CSS) is boxOrigin + offset; recovering boxOrigin
     // once up front lets us just add the (possibly-changing) offset back in on every move,
     // the same pattern attachTextDrag/attachBoxDragFromContent use.
     const baseLeft = (parseFloat(frameEl.style.left)||0) - startOffX;
     const baseTop = (parseFloat(frameEl.style.top)||0) - startOffY;
-    const W = parseFloat(slideDiv.style.width), H = parseFloat(slideDiv.style.height);
     const growRight = corner.indexOf("e") !== -1;   // east handles grow width to the right
     const growDown = corner.indexOf("s") !== -1;    // south handles grow height downward
     handle.classList.add("dragging");
@@ -4308,7 +4328,7 @@ function attachCornerResize(handle, frameEl, slideDiv, s, corner, ratioWKey, rat
       if(right > W){ boxW = Math.max(availW*0.3, boxW-(right-W)); wRatio = boxW/availW; }
       if(bottom > H){ boxH = Math.max(availH*0.25, boxH-(bottom-H)); hRatio = boxH/availH; }
       s[ratioWKey] = wRatio; s[ratioHKey] = hRatio;
-      s[offXKey] = newOffX; s[offYKey] = newOffY;
+      s[offXKey] = newOffX/resizeSc; s[offYKey] = newOffY/resizeSc;
       frameEl.style.width = Math.max(10, boxW-2*pad)+"px";
       frameEl.style.height = Math.max(10, boxH-2*pad)+"px";
       frameEl.style.left = (baseLeft+newOffX)+"px";
@@ -4658,7 +4678,7 @@ async function renderSlideCanvas(s, idx, animMs){
   else if(s.position==="bottom") startY = textBottom - totalH;
   else startY = textTop + ((textBottom-textTop)-totalH)/2;
 
-  const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
+  const toX = (s.textOffsetX||0)*offScale(W), toY = (s.textOffsetY||0)*offScale(W);
   startY += toY;
   const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
 
@@ -4725,7 +4745,7 @@ async function renderSlideCanvas(s, idx, animMs){
       if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
       else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
       else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
-      const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
+      const bToX = (s.bodyOffsetX||0)*offScale(W), bToY = (s.bodyOffsetY||0)*offScale(W);
       bStartY += bToY;
       const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
       ctx.textAlign = bAlign==="center" ? "center" : "left";
@@ -4746,11 +4766,11 @@ async function renderSlideCanvas(s, idx, animMs){
     layerPaint["extra:"+tl.id] = ()=>{
       const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
       const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
-      const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+      const basePx = tl.fontSizePx!=null ? tl.fontSizePx*offScale(W) : W*0.052;
       const lFit = fitSingleToHeight(ctx, tl.text, state.headWeight, fp.headName, basePx, 1.15, availWL, availHL);
       const lLines = lFit.lines, lLH = lFit.lh;
       const lBlockH = lLines.length*lLH;
-      const lTop = pad + (tl.offsetY||0), lLeft = pad + (tl.offsetX||0);
+      const lTop = pad + (tl.offsetY||0)*offScale(W), lLeft = pad + (tl.offsetX||0)*offScale(W);
       const lStartY = lTop + Math.max(0, (availHL-lBlockH)/2);
       const align = tl.align||"left";
       const lx = align==="center" ? lLeft + availWL/2 : lLeft;
@@ -5156,7 +5176,7 @@ async function buildSlideSVG(s, idx){
   else if(s.position==="bottom") startY = textBottom - totalH;
   else startY = textTop + ((textBottom-textTop)-totalH)/2;
 
-  const toX = s.textOffsetX||0, toY = s.textOffsetY||0;
+  const toX = (s.textOffsetX||0)*offScale(W), toY = (s.textOffsetY||0)*offScale(W);
   startY += toY;
   const x = (s.align==="center" ? boxes.text.x + boxes.text.w/2 : boxes.text.x + pad) + toX;
   const anchor = s.align==="center" ? "middle" : "start";
@@ -5218,7 +5238,7 @@ async function buildSlideSVG(s, idx){
     if((s.bodyPosition||"top")==="top") bStartY = bTextTop;
     else if(s.bodyPosition==="bottom") bStartY = bTextBottom - dBodyBlockH;
     else bStartY = bTextTop + ((bTextBottom-bTextTop)-dBodyBlockH)/2;
-    const bToX = s.bodyOffsetX||0, bToY = s.bodyOffsetY||0;
+    const bToX = (s.bodyOffsetX||0)*offScale(W), bToY = (s.bodyOffsetY||0)*offScale(W);
     bStartY += bToY;
     const bx = (bAlign==="center" ? boxes.body.x + boxes.body.w/2 : boxes.body.x + pad) + bToX;
     const bAnchor = bAlign==="center" ? "middle" : "start";
@@ -5234,11 +5254,11 @@ async function buildSlideSVG(s, idx){
     if(isLayerHidden(s, "extra:"+tl.id)) return;
     const boxW = (tl.boxWRatio||0.72)*W, boxH = (tl.boxHRatio||0.16)*H;
     const availWL = boxW - 2*pad, availHL = boxH - 2*pad;
-    const basePx = tl.fontSizePx!=null ? tl.fontSizePx : W*0.052;
+    const basePx = tl.fontSizePx!=null ? tl.fontSizePx*offScale(W) : W*0.052;
     const lFit = fitSingleToHeight(mctx, tl.text, state.headWeight, fp.headName, basePx, 1.15, availWL, availHL);
     const lLines = lFit.lines, lLH = lFit.lh;
     const lBlockH = lLines.length*lLH;
-    const lTop = pad + (tl.offsetY||0), lLeft = pad + (tl.offsetX||0);
+    const lTop = pad + (tl.offsetY||0)*offScale(W), lLeft = pad + (tl.offsetX||0)*offScale(W);
     const lStartY = lTop + Math.max(0, (availHL-lBlockH)/2);
     const align = tl.align||"left";
     const lx = align==="center" ? lLeft + availWL/2 : lLeft;
