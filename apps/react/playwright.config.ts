@@ -12,7 +12,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium-desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } } },
-    { name: 'chromium-mobile', use: { ...devices['iPhone 13'] } },
+    { name: 'chromium-mobile', use: { ...devices['Pixel 7'], browserName: 'chromium' } },
   ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1',
