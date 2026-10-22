@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: react-beta-${{ github.ref }}
@@ -21,25 +21,51 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Confirm React workspace and lockfile
-        run: |
-          test -f apps/react/package.json
-          test -f apps/react/package-lock.json
+        with:
+          persist-credentials: true
+      - name: Confirm React workspace exists
+        run: test -f apps/react/package.json
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: apps/react/package-lock.json
+      - name: Refresh dependency lockfile
+        working-directory: apps/react
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit updated lockfile
+        shell: bash
+        run: |
+          git add apps/react/package-lock.json
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(react): refresh package lockfile"
+            git push
+          fi
       - name: Install from lockfile
         working-directory: apps/react
         run: npm ci --no-audit --no-fund
+      - name: Install Chromium for browser smoke tests
+        working-directory: apps/react
+        run: npx playwright install --with-deps chromium
       - name: Type check
         working-directory: apps/react
         run: npm run typecheck
       - name: Unit tests
         working-directory: apps/react
         run: npm run test -- --run
+      - name: Browser visual smoke tests
+        working-directory: apps/react
+        run: npm run test:visual
       - name: Production build
         working-directory: apps/react
         run: npm run build
+      - name: Upload browser screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-beta-visual-failures
+          path: |
+            apps/react/test-results/
+            apps/react/playwright-report/
+          if-no-files-found: ignore
