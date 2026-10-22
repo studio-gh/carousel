@@ -47,11 +47,11 @@ jobs:
       - name: Production build
         working-directory: apps/react
         run: npm run build
-      - name: Upload browser screenshots on failure
-        if: failure()
+      - name: Upload browser review screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: react-beta-visual-failures
+          name: react-beta-browser-review
           path: |
             apps/react/test-results/
             apps/react/playwright-report/
