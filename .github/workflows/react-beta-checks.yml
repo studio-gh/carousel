@@ -1,0 +1,58 @@
+name: React beta quality gate
+
+on:
+  pull_request:
+    branches: [main, react-beta-foundation]
+  push:
+    branches: [react-beta-foundation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: react-beta-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: React beta checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Confirm React workspace and lockfile
+        run: |
+          test -f apps/react/package.json
+          test -f apps/react/package-lock.json
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install from lockfile
+        working-directory: apps/react
+        run: npm ci --no-audit --no-fund
+      - name: Install Chromium for browser smoke tests
+        working-directory: apps/react
+        run: npx playwright install --with-deps chromium
+      - name: Type check
+        working-directory: apps/react
+        run: npm run typecheck
+      - name: Unit tests
+        working-directory: apps/react
+        run: npm run test -- --run
+      - name: Browser visual smoke tests
+        working-directory: apps/react
+        run: npm run test:visual
+      - name: Production build
+        working-directory: apps/react
+        run: npm run build
+      - name: Upload browser review screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-beta-browser-review
+          path: |
+            apps/react/test-results/
+            apps/react/playwright-report/
+          if-no-files-found: ignore

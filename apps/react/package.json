@@ -1,0 +1,27 @@
+{
+  "name": "carousel-studio-react",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:visual": "playwright test",
+    "build": "npm run typecheck && vite build"
+  },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "zod": "3.25.67"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.7",
+    "@vitejs/plugin-react": "4.6.0",
+    "typescript": "5.8.3",
+    "vite": "6.3.5",
+    "vitest": "3.2.4"
+  }
+}
