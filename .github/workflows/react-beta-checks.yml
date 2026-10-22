@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   guard:
-    name: Repository and lockfile guard
+    name: React beta checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,20 +28,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: apps/react/package-lock.json
       - name: Install pinned React dependencies
         working-directory: apps/react
         run: npm install --no-audit --no-fund
       - name: Type check
-        if: hashFiles('apps/react/package.json') != ''
         working-directory: apps/react
         run: npm run typecheck
       - name: Unit tests
-        if: hashFiles('apps/react/package.json') != ''
         working-directory: apps/react
         run: npm run test -- --run
       - name: Production build
-        if: hashFiles('apps/react/package.json') != ''
         working-directory: apps/react
         run: npm run build
