@@ -61,7 +61,6 @@ export default function App() {
   const [activePanel, setActivePanel] = useState<'text' | 'image' | 'layout'>('text')
   const [showSafeZone, setShowSafeZone] = useState(false)
   const editorCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const exportCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const slide = project.slides[0]
   const scene = useMemo(() => buildRenderScene(slide, 1080, 1350, 1080), [slide])
@@ -79,7 +78,6 @@ export default function App() {
     let cancelled = false
     const render = async () => {
       if (editorCanvasRef.current) await renderSceneToCanvas(editorCanvasRef.current, scene, { includeText: false })
-      if (exportCanvasRef.current) await renderSceneToCanvas(exportCanvasRef.current, scene)
       if (!cancelled) setStatus('Prévia atualizada')
     }
     void render().catch(() => { if (!cancelled) setStatus('Falha ao atualizar a prévia') })
@@ -281,6 +279,5 @@ export default function App() {
       <button onClick={() => setActivePanel('layout')}>Layout</button>
       <button className="mobile-export" disabled={exporting} onClick={() => void exportPng()}>Exportar</button>
     </div>
-    <div className="export-mirror" aria-hidden="true"><canvas ref={exportCanvasRef} /></div>
   </main>
 }
