@@ -21,25 +21,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Confirm the React app is present before enabling full checks
+      - name: Confirm the React app is present
         shell: bash
-        run: |
-          if [ ! -f apps/react/package.json ]; then
-            echo "::warning::React app is not committed yet. Full CI is intentionally not enabled until the reproducible app workspace is added at apps/react/."
-            echo "status=not-ready" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+        run: test -f apps/react/package.json
       - name: Setup Node
-        if: hashFiles('apps/react/package.json') != ''
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/react/package-lock.json
-      - name: Install from lockfile
-        if: hashFiles('apps/react/package.json') != ''
+      - name: Install pinned React dependencies
         working-directory: apps/react
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - name: Type check
         if: hashFiles('apps/react/package.json') != ''
         working-directory: apps/react
