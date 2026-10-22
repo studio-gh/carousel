@@ -15,20 +15,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  guard:
+  checks:
     name: React beta checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Confirm the React app is present
-        shell: bash
+      - name: Confirm the React workspace exists
         run: test -f apps/react/package.json
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install pinned React dependencies
+      - name: Install dependencies
         working-directory: apps/react
         run: npm install --no-audit --no-fund
       - name: Type check
