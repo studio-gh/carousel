@@ -35,6 +35,18 @@ jobs:
           if [ ! -f package-lock.json ]; then
             npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           fi
+      - name: Commit generated lockfile
+        shell: bash
+        run: |
+          if [ -f apps/react/package-lock.json ]; then
+            git add apps/react/package-lock.json
+            if ! git diff --cached --quiet; then
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git commit -m "chore(react): add generated package lockfile"
+              git push
+            fi
+          fi
       - name: Install from lockfile
         working-directory: apps/react
         run: npm ci --no-audit --no-fund
