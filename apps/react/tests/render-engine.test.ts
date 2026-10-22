@@ -7,16 +7,18 @@ import { createDefaultProject } from '../src/core/project/defaults'
 function fakeContext() {
   let fontSize = 100
   return {
-    set font(value: string) { const match = value.match(/(\d+(?:\.\d+)?)px/); if (match) fontSize = Number(match[1]) },
+    set font(value: string) { const match = value.match(/(\\d+(?:\\.\\d+)?)px/); if (match) fontSize = Number(match[1]) },
     get font() { return '800 ' + fontSize + 'px Playfair Display' },
     measureText(text: string) { return { width: text.length * fontSize * .52 } },
   } as unknown as CanvasRenderingContext2D
 }
 
 describe('Renderer and typography regression gates', () => {
-  it('builds SVG with the expected output size and retained layout geometry', () => {
+  it('builds SVG with expected output size and retained layout geometry', () => {
     const slide = {...createDefaultProject().slides[0],layout:'columnasym' as const,image:'data:image/png;base64,AA==',heading:'Hello',body:'World'}
-    const scene = buildRenderScene(slide,1080,1350,1080)
+    const ctx = fakeContext()
+    const textLayout = buildTextLayout(ctx,slide,{x:0,y:0,w:1080,h:1350},1080,1350,{heading:{family:'Playfair Display',weight:800},body:{family:'Inter',weight:400}})
+    const scene = buildRenderScene(slide,1080,1350,1080,textLayout)
     const svg = buildSlideSVG(scene)
     expect(svg).toContain('width="1080" height="1350"')
     expect(scene.geometry.image.w).toBeCloseTo(1080 * .62)
@@ -25,7 +27,9 @@ describe('Renderer and typography regression gates', () => {
   })
   it('respects canonical layer visibility', () => {
     const slide = {...createDefaultProject().slides[0],heading:'Hidden headline',layerHidden:{text:true}}
-    const scene = buildRenderScene(slide,1080,1350,1080)
+    const ctx = fakeContext()
+    const textLayout = buildTextLayout(ctx,slide,{x:0,y:0,w:1080,h:1350},1080,1350,{heading:{family:'Playfair Display',weight:800},body:{family:'Inter',weight:400}})
+    const scene = buildRenderScene(slide,1080,1350,1080,textLayout)
     expect(buildSlideSVG(scene)).not.toContain('Hidden headline')
   })
   it('keeps the reported headline split into a canonical set of lines', () => {
