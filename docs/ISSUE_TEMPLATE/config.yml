@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Carousel Studio project documentation
+    url: https://app.notion.com/p/glermenrik/Carousel-Studio-3c6029fe002880c7a4dbe87ba55f7960
+    about: Read the product plan and current React migration status before reporting a bug.
