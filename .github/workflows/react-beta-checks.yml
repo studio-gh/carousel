@@ -1,0 +1,54 @@
+name: React beta quality gate
+
+on:
+  pull_request:
+    branches: [main, react-beta-foundation]
+  push:
+    branches: [react-beta-foundation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: react-beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Repository and lockfile guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Confirm the React app is present before enabling full checks
+        shell: bash
+        run: |
+          if [ ! -f apps/react/package.json ]; then
+            echo "::warning::React app is not committed yet. Full CI is intentionally not enabled until the reproducible app workspace is added at apps/react/."
+            echo "status=not-ready" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+      - name: Setup Node
+        if: hashFiles('apps/react/package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/react/package-lock.json
+      - name: Install from lockfile
+        if: hashFiles('apps/react/package.json') != ''
+        working-directory: apps/react
+        run: npm ci
+      - name: Type check
+        if: hashFiles('apps/react/package.json') != ''
+        working-directory: apps/react
+        run: npm run typecheck
+      - name: Unit tests
+        if: hashFiles('apps/react/package.json') != ''
+        working-directory: apps/react
+        run: npm run test -- --run
+      - name: Production build
+        if: hashFiles('apps/react/package.json') != ''
+        working-directory: apps/react
+        run: npm run build
